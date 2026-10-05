@@ -1,0 +1,54 @@
+{
+  "name": "kardex-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch --env-file=.env src/index.js",
+    "start": "node scripts/arranque.js",
+    "test": "vitest run",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:seed": "node --env-file=.env prisma/seed.js",
+    "db:generate": "prisma generate",
+    "plataforma:admin": "node --env-file-if-exists=.env scripts/crear-admin-plataforma.js",
+    "worker": "node --env-file=.env src/worker.js"
+  },
+  "prisma": {
+    "seed": "node --env-file=.env prisma/seed.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.16.0",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "@socket.io/redis-emitter": "^5.1.0",
+    "argon2": "^0.44.0",
+    "bullmq": "^6.3.11",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.8.0",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^7.0.6",
+    "otplib": "^12.0.1",
+    "pdfkit": "^0.20.2",
+    "pino": "^9.12.0",
+    "pino-http": "^10.5.0",
+    "prisma": "^6.16.0",
+    "qrcode": "^1.5.4",
+    "rate-limit-redis": "^4.2.2",
+    "socket.io": "^4.8.1",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.1.1",
+    "supertest": "^7.1.4",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}
