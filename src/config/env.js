@@ -19,12 +19,17 @@ const schema = z.object({
   /** Intentos de login por IP cada 15 minutos */
   LOGIN_RATE_LIMIT: z.coerce.number().default(10),
   IGV_TASA: z.coerce.number().min(0).max(1).default(0.18),
+  /** Boletas desde este monto deben identificar al comprador (norma SUNAT) */
+  BOLETA_UMBRAL_IDENTIFICACION: z.coerce.number().min(0).default(700),
   /** Carpeta de archivos de exportación (se borran a las 24 h) */
   REPORTES_DIR: z.string().default('./storage/reportes'),
   /** true: el worker de reportes corre dentro de la API; false: proceso aparte (npm run worker) */
   REPORTES_WORKER_EMBEBIDO: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
   /** Clave para cifrar los secretos 2FA (64 caracteres hex = 32 bytes) */
   MFA_ENCRYPTION_KEY: z.string().regex(/^[0-9a-f]{64}$/i, 'MFA_ENCRYPTION_KEY debe tener 64 caracteres hexadecimales'),
+  /** Consulta de DNI/RUC para autocompletar clientes: proveedor ("decolecta" | "apisnetpe") y su token */
+  CONSULTA_DOC_PROVEEDOR: z.enum(['', 'decolecta', 'apisnetpe']).default(''),
+  CONSULTA_DOC_TOKEN: z.string().optional(),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().default(587),
   SMTP_USER: z.string().optional(),

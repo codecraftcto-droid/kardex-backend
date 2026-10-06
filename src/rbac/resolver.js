@@ -27,17 +27,19 @@ export function cubre(alcance, recurso) {
  * @param {{alcance: object, permisos: string[]}[]} p.asignaciones  roles activos con su alcance
  * @param {{alcance: object, permiso: string, efecto: 'allow'|'deny'}[]} p.excepciones
  * @param {Set<string>} [p.permisosLectura] códigos de solo lectura (filtra para usuarios cliente)
+ * @param {Set<string>} [p.permisosOperador] códigos permitidos a usuarios operador
  * @param {string|null} [p.empresaCliente] empresa del usuario cliente
  */
-export function construirPermisos({ tipoUsuario, asignaciones, excepciones = [], permisosLectura, empresaCliente = null }) {
+export function construirPermisos({ tipoUsuario, asignaciones, excepciones = [], permisosLectura, permisosOperador, empresaCliente = null }) {
   const grants = {};
   const denies = {};
-  const esCliente = tipoUsuario === 'cliente';
-
   const permitido = (codigo, alcance) => {
-    if (!esCliente) return true;
-    // Portal cliente: solo lectura y solo dentro de su empresa
-    return permisosLectura?.has(codigo) && alcance.tipo !== 'estudio' && alcance.empresaId === empresaCliente;
+    if (tipoUsuario === 'interno') return true;
+    // Usuarios de la empresa cliente: siempre dentro de su empresa, nunca a nivel estudio
+    const enSuEmpresa = alcance.tipo !== 'estudio' && alcance.empresaId === empresaCliente;
+    if (tipoUsuario === 'cliente') return enSuEmpresa && !!permisosLectura?.has(codigo); // portal: solo lectura
+    if (tipoUsuario === 'operador') return enSuEmpresa && !!permisosOperador?.has(codigo); // caja: lectura + POS
+    return false;
   };
   const agregar = (mapa, codigo, alcance) => {
     (mapa[codigo] ||= []).push(alcance);

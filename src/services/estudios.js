@@ -14,16 +14,31 @@ export async function sincronizarCatalogo(prisma) {
     const fila = await prisma.permiso.upsert({ where: { codigo: p.codigo }, update: p, create: p });
     if (!existentes.has(p.codigo)) nuevos.push(fila);
   }
-  if (!nuevos.length || !existentes.size) return nuevos;
-
-  for (const plantilla of ROLES_PLANTILLA) {
-    const otorgar = nuevos.filter((p) => plantilla.permisos.includes(p.codigo));
-    if (!otorgar.length) continue;
-    const roles = await prisma.rol.findMany({ where: { nombre: plantilla.nombre, esSistema: true }, select: { id: true, tenantId: true } });
-    await prisma.rolPermiso.createMany({
-      data: roles.flatMap((r) => otorgar.map((p) => ({ rolId: r.id, permisoId: p.id, tenantId: r.tenantId }))),
-      skipDuplicates: true,
-    });
+  // Permisos nuevos → a los roles plantilla existentes cuya definición los incluye
+  // (en una base recién creada no hay roles todavía: no hay nada que actualizar)
+  if (nuevos.length && existentes.size) {
+    for (const plantilla of ROLES_PLANTILLA) {
+      const otorgar = nuevos.filter((p) => plantilla.permisos.includes(p.codigo));
+      if (!otorgar.length) continue;
+      const roles = await prisma.rol.findMany({ where: { nombre: plantilla.nombre, esSistema: true }, select: { id: true, tenantId: true } });
+      await prisma.rolPermiso.createMany({
+        data: roles.flatMap((r) => otorgar.map((p) => ({ rolId: r.id, permisoId: p.id, tenantId: r.tenantId }))),
+        skipDuplicates: true,
+      });
+    }
+  }
+  // Roles plantilla nuevos (p. ej. "Cajero") en los estudios que aún no los tienen
+  const idDe = new Map((await prisma.permiso.findMany({ select: { id: true, codigo: true } })).map((p) => [p.codigo, p.id]));
+  for (const tenant of await prisma.tenant.findMany({ select: { id: true } })) {
+    const existentes = new Set((await prisma.rol.findMany({ where: { tenantId: tenant.id }, select: { nombre: true } })).map((r) => r.nombre));
+    for (const plantilla of ROLES_PLANTILLA.filter((pl) => !existentes.has(pl.nombre))) {
+      await prisma.rol.create({
+        data: {
+          tenantId: tenant.id, nombre: plantilla.nombre, descripcion: plantilla.descripcion, esSistema: true,
+          permisos: { create: plantilla.permisos.map((codigo) => ({ permisoId: idDe.get(codigo), tenantId: tenant.id })) },
+        },
+      });
+    }
   }
   return nuevos;
 }

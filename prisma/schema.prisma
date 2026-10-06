@@ -13,6 +13,8 @@ datasource db {
 enum TipoUsuario {
   interno
   cliente
+  /// Empleado de una empresa cliente que opera el punto de venta (solo en su empresa)
+  operador
 }
 
 enum EstadoUsuario {
@@ -60,6 +62,57 @@ enum MotivoMovimiento {
   TRANSFERENCIA_ENTRADA
 }
 
+// ───── Punto de venta ─────
+enum TipoDocIdentidad {
+  SIN_DOCUMENTO
+  DNI
+  CARNE_EXTRANJERIA
+  RUC
+  PASAPORTE
+}
+
+enum TipoComprobante {
+  FACTURA
+  BOLETA
+  NOTA_VENTA
+  NOTA_CREDITO
+}
+
+enum EstadoComprobante {
+  EMITIDO
+  ANULADO
+}
+
+/// Envío a SUNAT (fuera de alcance por ahora): los comprobantes electrónicos quedan PENDIENTE
+enum EstadoSunat {
+  NO_APLICA
+  PENDIENTE
+}
+
+enum FormaPago {
+  CONTADO
+  CREDITO
+}
+
+enum EstadoCobranza {
+  VIGENTE
+  ANULADA
+}
+
+enum MedioPago {
+  EFECTIVO
+  TARJETA
+  YAPE
+  PLIN
+  TRANSFERENCIA
+  OTRO
+}
+
+enum EstadoSesionCaja {
+  ABIERTA
+  CERRADA
+}
+
 enum EstadoExportacion {
   PENDIENTE
   PROCESANDO
@@ -96,11 +149,11 @@ enum EstadoTransferencia {
 // ───────────────────────── Estudio (tenant) ─────────────────────────
 
 model Tenant {
-  id        String   @id @default(uuid()) @db.Uuid
-  nombre    String
-  ruc       String?
-  activo    Boolean  @default(true)
-  creadoEn  DateTime @default(now()) @map("creado_en")
+  id               String    @id @default(uuid()) @db.Uuid
+  nombre           String
+  ruc              String?
+  activo           Boolean   @default(true)
+  creadoEn         DateTime  @default(now()) @map("creado_en")
   // ── Datos administrados desde la plataforma (Módulo C) ──
   planId           String?   @map("plan_id") @db.Uuid
   emailContacto    String?   @map("email_contacto")
@@ -108,13 +161,13 @@ model Tenant {
   suspendidoEn     DateTime? @map("suspendido_en")
   motivoSuspension String?   @map("motivo_suspension")
 
-  plan      Plan?               @relation(fields: [planId], references: [id])
-  facturas  FacturaPlataforma[]
+  plan     Plan?               @relation(fields: [planId], references: [id])
+  facturas FacturaPlataforma[]
 
-  usuarios  Usuario[]
-  roles     Rol[]
-  empresas  Empresa[]
-  unidades  UnidadMedida[]
+  usuarios Usuario[]
+  roles    Rol[]
+  empresas Empresa[]
+  unidades UnidadMedida[]
 
   @@map("tenants")
 }
@@ -139,19 +192,19 @@ model Permiso {
 }
 
 model Rol {
-  id          String   @id @default(uuid()) @db.Uuid
-  tenantId    String   @map("tenant_id") @db.Uuid
-  nombre      String
-  descripcion String?
-  esSistema   Boolean  @default(false) @map("es_sistema")
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  nombre        String
+  descripcion   String?
+  esSistema     Boolean  @default(false) @map("es_sistema")
   /// Preparado para 2FA obligatorio por rol (Fase 4)
-  requiereMfa Boolean  @default(false) @map("requiere_mfa")
-  activo      Boolean  @default(true)
-  creadoEn    DateTime @default(now()) @map("creado_en")
+  requiereMfa   Boolean  @default(false) @map("requiere_mfa")
+  activo        Boolean  @default(true)
+  creadoEn      DateTime @default(now()) @map("creado_en")
   actualizadoEn DateTime @updatedAt @map("actualizado_en")
 
-  tenant      Tenant       @relation(fields: [tenantId], references: [id])
-  permisos    RolPermiso[]
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  permisos     RolPermiso[]
   asignaciones UsuarioRol[]
 
   @@unique([tenantId, nombre])
@@ -193,16 +246,16 @@ model Usuario {
   creadoEn         DateTime      @default(now()) @map("creado_en")
   actualizadoEn    DateTime      @updatedAt @map("actualizado_en")
 
-  tenant       Tenant                    @relation(fields: [tenantId], references: [id])
-  empresa      Empresa?                  @relation(fields: [empresaId], references: [id])
-  asignaciones UsuarioRol[]
-  excepciones  UsuarioPermisoExcepcion[]
-  sesiones     Sesion[]
-  tokens       TokenUsuario[]
-  sedesResponsable Sede[]
-  movimientos  Movimiento[]
-  transferenciasSolicitadas Transferencia[] @relation("Solicitante")
-  codigosRecuperacion MfaCodigoRecuperacion[]
+  tenant                    Tenant                    @relation(fields: [tenantId], references: [id])
+  empresa                   Empresa?                  @relation(fields: [empresaId], references: [id])
+  asignaciones              UsuarioRol[]
+  excepciones               UsuarioPermisoExcepcion[]
+  sesiones                  Sesion[]
+  tokens                    TokenUsuario[]
+  sedesResponsable          Sede[]
+  movimientos               Movimiento[]
+  transferenciasSolicitadas Transferencia[]           @relation("Solicitante")
+  codigosRecuperacion       MfaCodigoRecuperacion[]
 
   @@index([tenantId])
   @@map("usuarios")
@@ -247,16 +300,16 @@ model UsuarioPermisoExcepcion {
 }
 
 model Sesion {
-  id               String    @id @default(uuid()) @db.Uuid
-  tenantId         String    @map("tenant_id") @db.Uuid
-  usuarioId        String    @map("usuario_id") @db.Uuid
-  refreshTokenHash String    @map("refresh_token_hash")
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  usuarioId        String   @map("usuario_id") @db.Uuid
+  refreshTokenHash String   @map("refresh_token_hash")
   dispositivo      String?
   ip               String?
-  expiraEn         DateTime  @map("expira_en")
-  revocada         Boolean   @default(false)
-  creadaEn         DateTime  @default(now()) @map("creada_en")
-  ultimoUso        DateTime  @default(now()) @map("ultimo_uso")
+  expiraEn         DateTime @map("expira_en")
+  revocada         Boolean  @default(false)
+  creadaEn         DateTime @default(now()) @map("creada_en")
+  ultimoUso        DateTime @default(now()) @map("ultimo_uso")
 
   usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
 
@@ -316,19 +369,24 @@ model Empresa {
   telefono           String?
   direccion          String?
   metodoValorizacion MetodoValorizacion @default(PROMEDIO) @map("metodo_valorizacion")
+  nombreComercial    String?            @map("nombre_comercial")
   activo             Boolean            @default(true)
   creadoEn           DateTime           @default(now()) @map("creado_en")
   actualizadoEn      DateTime           @updatedAt @map("actualizado_en")
 
-  tenant      Tenant       @relation(fields: [tenantId], references: [id])
-  sedes       Sede[]
-  almacenes   Almacen[]
-  usuarios    Usuario[]
+  tenant         Tenant               @relation(fields: [tenantId], references: [id])
+  sedes          Sede[]
+  almacenes      Almacen[]
+  usuarios       Usuario[]
   categorias     Categoria[]
   productos      Producto[]
   movimientos    Movimiento[]
   transferencias Transferencia[]
   documentos     DocumentoComercial[]
+  clientes       Cliente[]
+  cajas          Caja[]
+  comprobantes   Comprobante[]
+  cobranzas      Cobranza[]
 
   @@unique([tenantId, ruc])
   @@index([tenantId])
@@ -367,13 +425,14 @@ model Almacen {
   creadoEn      DateTime @default(now()) @map("creado_en")
   actualizadoEn DateTime @updatedAt @map("actualizado_en")
 
-  empresa     Empresa      @relation(fields: [empresaId], references: [id])
-  sede        Sede         @relation(fields: [sedeId], references: [id])
-  stocks      Stock[]
-  movimientos Movimiento[]
-  transferenciasOrigen  Transferencia[] @relation("Origen")
-  transferenciasDestino Transferencia[] @relation("Destino")
+  empresa               Empresa              @relation(fields: [empresaId], references: [id])
+  sede                  Sede                 @relation(fields: [sedeId], references: [id])
+  stocks                Stock[]
+  movimientos           Movimiento[]
+  transferenciasOrigen  Transferencia[]      @relation("Origen")
+  transferenciasDestino Transferencia[]      @relation("Destino")
   documentos            DocumentoComercial[]
+  cajas                 Caja[]
 
   @@unique([empresaId, codigo])
   @@index([tenantId])
@@ -422,18 +481,22 @@ model Producto {
   codigoBarras      String?  @map("codigo_barras")
   nombre            String
   descripcion       String?
+  /// Precio de venta CON IGV (el que ve el cliente en caja)
   precioReferencial Decimal? @map("precio_referencial") @db.Decimal(14, 4)
+  /// Catálogo 07 SUNAT: 10 gravado, 20 exonerado, 30 inafecto
+  afectacionIgv     String   @default("10") @map("afectacion_igv")
   activo            Boolean  @default(true)
   creadoEn          DateTime @default(now()) @map("creado_en")
   actualizadoEn     DateTime @updatedAt @map("actualizado_en")
 
-  empresa   Empresa             @relation(fields: [empresaId], references: [id])
-  categoria Categoria?          @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
-  unidad    UnidadMedida        @relation(fields: [unidadId], references: [id])
-  stocks    Stock[]
-  detalles  MovimientoDetalle[]
+  empresa               Empresa                     @relation(fields: [empresaId], references: [id])
+  categoria             Categoria?                  @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+  unidad                UnidadMedida                @relation(fields: [unidadId], references: [id])
+  stocks                Stock[]
+  detalles              MovimientoDetalle[]
   transferenciaDetalles TransferenciaDetalle[]
   documentoDetalles     DocumentoComercialDetalle[]
+  comprobanteDetalles   ComprobanteDetalle[]
 
   @@unique([empresaId, sku])
   @@unique([empresaId, codigoBarras])
@@ -486,10 +549,10 @@ model CapaCosto {
 
 /// Correlativo de documentos por empresa y tipo (E-000001, S-000001, T-000001)
 model Correlativo {
-  tenantId  String         @map("tenant_id") @db.Uuid
-  empresaId String         @map("empresa_id") @db.Uuid
+  tenantId  String @map("tenant_id") @db.Uuid
+  empresaId String @map("empresa_id") @db.Uuid
   tipo      String
-  ultimo    Int            @default(0)
+  ultimo    Int    @default(0)
 
   @@id([empresaId, tipo])
   @@index([tenantId])
@@ -519,14 +582,15 @@ model Movimiento {
   /// Transferencia que originó el movimiento (despacho o recepción)
   transferenciaId    String?            @map("transferencia_id") @db.Uuid
 
-  empresa    Empresa             @relation(fields: [empresaId], references: [id])
-  almacen    Almacen             @relation(fields: [almacenId], references: [id])
-  usuario    Usuario             @relation(fields: [usuarioId], references: [id])
-  anula      Movimiento?         @relation("Anulacion", fields: [anulaId], references: [id])
-  anuladoPor    Movimiento?         @relation("Anulacion")
-  transferencia Transferencia?      @relation(fields: [transferenciaId], references: [id])
+  empresa            Empresa             @relation(fields: [empresaId], references: [id])
+  almacen            Almacen             @relation(fields: [almacenId], references: [id])
+  usuario            Usuario             @relation(fields: [usuarioId], references: [id])
+  anula              Movimiento?         @relation("Anulacion", fields: [anulaId], references: [id])
+  anuladoPor         Movimiento?         @relation("Anulacion")
+  transferencia      Transferencia?      @relation(fields: [transferenciaId], references: [id])
   documentoComercial DocumentoComercial? @relation("MovimientoDocumento")
-  detalles      MovimientoDetalle[]
+  comprobante        Comprobante?        @relation("MovimientoComprobante")
+  detalles           MovimientoDetalle[]
 
   @@unique([empresaId, numero])
   @@index([tenantId])
@@ -587,12 +651,12 @@ model Transferencia {
   motivoCierre     String?             @map("motivo_cierre")
   actualizadoEn    DateTime            @updatedAt @map("actualizado_en")
 
-  empresa      Empresa                @relation(fields: [empresaId], references: [id])
-  origen       Almacen                @relation("Origen", fields: [origenAlmacenId], references: [id])
-  destino      Almacen                @relation("Destino", fields: [destinoAlmacenId], references: [id])
-  solicitadoPor Usuario               @relation("Solicitante", fields: [solicitadoPorId], references: [id])
-  detalles     TransferenciaDetalle[]
-  movimientos  Movimiento[]
+  empresa       Empresa                @relation(fields: [empresaId], references: [id])
+  origen        Almacen                @relation("Origen", fields: [origenAlmacenId], references: [id])
+  destino       Almacen                @relation("Destino", fields: [destinoAlmacenId], references: [id])
+  solicitadoPor Usuario                @relation("Solicitante", fields: [solicitadoPorId], references: [id])
+  detalles      TransferenciaDetalle[]
+  movimientos   Movimiento[]
 
   @@unique([empresaId, numero])
   @@index([tenantId])
@@ -789,18 +853,18 @@ model Plan {
 
 /// Cobro mensual a un estudio (una por estudio y periodo)
 model FacturaPlataforma {
-  id               String        @id @default(uuid()) @db.Uuid
-  tenantId         String        @map("tenant_id") @db.Uuid
-  planId           String        @map("plan_id") @db.Uuid
+  id              String        @id @default(uuid()) @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  planId          String        @map("plan_id") @db.Uuid
   /// Periodo facturado, formato AAAA-MM
-  periodo          String
-  monto            Decimal       @db.Decimal(10, 2)
-  estado           EstadoFactura @default(PENDIENTE)
-  emitidaEn        DateTime      @default(now()) @map("emitida_en")
-  venceEn          DateTime      @map("vence_en") @db.Date
-  pagadaEn         DateTime?     @map("pagada_en")
-  referenciaPago   String?       @map("referencia_pago")
-  motivoAnulacion  String?       @map("motivo_anulacion")
+  periodo         String
+  monto           Decimal       @db.Decimal(10, 2)
+  estado          EstadoFactura @default(PENDIENTE)
+  emitidaEn       DateTime      @default(now()) @map("emitida_en")
+  venceEn         DateTime      @map("vence_en") @db.Date
+  pagadaEn        DateTime?     @map("pagada_en")
+  referenciaPago  String?       @map("referencia_pago")
+  motivoAnulacion String?       @map("motivo_anulacion")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   plan   Plan   @relation(fields: [planId], references: [id])
@@ -833,29 +897,285 @@ model PlataformaAuditoria {
 /// Solicitud de exportación procesada por la cola (BullMQ). El archivo vive en disco 24 h
 /// y solo lo descarga el usuario que lo pidió.
 model ExportacionReporte {
-  id           String            @id @default(uuid()) @db.Uuid
-  tenantId     String            @map("tenant_id") @db.Uuid
-  usuarioId    String            @map("usuario_id") @db.Uuid
-  empresaId    String            @map("empresa_id") @db.Uuid
-  tipo         String
-  formato      String
-  parametros   Json
-  titulo       String?
-  estado       EstadoExportacion @default(PENDIENTE)
+  id            String            @id @default(uuid()) @db.Uuid
+  tenantId      String            @map("tenant_id") @db.Uuid
+  usuarioId     String            @map("usuario_id") @db.Uuid
+  empresaId     String            @map("empresa_id") @db.Uuid
+  tipo          String
+  formato       String
+  parametros    Json
+  titulo        String?
+  estado        EstadoExportacion @default(PENDIENTE)
   /// 0–100
-  progreso     Int               @default(0)
-  filas        Int?
-  nombreArchivo String?          @map("nombre_archivo")
-  rutaArchivo  String?           @map("ruta_archivo")
-  tamanoBytes  Int?              @map("tamano_bytes")
-  error        String?
-  creadoEn     DateTime          @default(now()) @map("creado_en")
-  iniciadoEn   DateTime?         @map("iniciado_en")
-  terminadoEn  DateTime?         @map("terminado_en")
-  expiraEn     DateTime?         @map("expira_en")
+  progreso      Int               @default(0)
+  filas         Int?
+  nombreArchivo String?           @map("nombre_archivo")
+  rutaArchivo   String?           @map("ruta_archivo")
+  tamanoBytes   Int?              @map("tamano_bytes")
+  error         String?
+  creadoEn      DateTime          @default(now()) @map("creado_en")
+  iniciadoEn    DateTime?         @map("iniciado_en")
+  terminadoEn   DateTime?         @map("terminado_en")
+  expiraEn      DateTime?         @map("expira_en")
 
   @@index([tenantId])
   @@index([usuarioId, creadoEn])
   @@index([estado, expiraEn])
   @@map("exportaciones_reporte")
+}
+
+// ═══════════════════════ Punto de venta y comprobantes ═══════════════════════
+
+/// Cliente de una empresa (a quien se le vende). "Clientes varios" no se guarda como registro.
+model Cliente {
+  id                String           @id @default(uuid()) @db.Uuid
+  tenantId          String           @map("tenant_id") @db.Uuid
+  empresaId         String           @map("empresa_id") @db.Uuid
+  tipoDocumento     TipoDocIdentidad @map("tipo_documento")
+  numeroDocumento   String           @map("numero_documento")
+  nombre            String
+  direccion         String?
+  email             String?
+  telefono          String?
+  /// Persona natural con negocio: su RUC 10 para emitirle factura sin registrarla dos veces
+  rucAsociado       String?          @map("ruc_asociado")
+  /// Venta al crédito: habilitado, tope de deuda (null = sin tope) y plazo por defecto
+  creditoHabilitado Boolean          @default(false) @map("credito_habilitado")
+  limiteCredito     Decimal?         @map("limite_credito") @db.Decimal(14, 2)
+  diasCredito       Int              @default(30) @map("dias_credito")
+  activo            Boolean          @default(true)
+  creadoEn          DateTime         @default(now()) @map("creado_en")
+  actualizadoEn     DateTime         @updatedAt @map("actualizado_en")
+
+  empresa      Empresa       @relation(fields: [empresaId], references: [id])
+  comprobantes Comprobante[]
+  cobranzas    Cobranza[]
+
+  @@unique([empresaId, tipoDocumento, numeroDocumento])
+  @@index([tenantId])
+  @@index([empresaId, nombre])
+  @@map("clientes")
+}
+
+/// Caja (punto de venta) de un almacén, con sus series de comprobantes
+model Caja {
+  id                      String   @id @default(uuid()) @db.Uuid
+  tenantId                String   @map("tenant_id") @db.Uuid
+  empresaId               String   @map("empresa_id") @db.Uuid
+  sedeId                  String   @map("sede_id") @db.Uuid
+  almacenId               String   @map("almacen_id") @db.Uuid
+  nombre                  String
+  serieFactura            String   @map("serie_factura")
+  serieBoleta             String   @map("serie_boleta")
+  serieNotaVenta          String   @map("serie_nota_venta")
+  serieNotaCreditoFactura String   @map("serie_nota_credito_factura")
+  serieNotaCreditoBoleta  String   @map("serie_nota_credito_boleta")
+  /// Rebaja máxima (%) que el cajero aplica sin autorización de un supervisor
+  descuentoMaximo         Decimal  @default(5) @map("descuento_maximo") @db.Decimal(5, 2)
+  activo                  Boolean  @default(true)
+  creadoEn                DateTime @default(now()) @map("creado_en")
+  actualizadoEn           DateTime @updatedAt @map("actualizado_en")
+
+  empresa      Empresa       @relation(fields: [empresaId], references: [id])
+  almacen      Almacen       @relation(fields: [almacenId], references: [id])
+  sesiones     SesionCaja[]
+  comprobantes Comprobante[]
+
+  @@unique([empresaId, nombre])
+  @@index([tenantId])
+  @@map("cajas")
+}
+
+/// Turno de caja: apertura → ventas → cierre con arqueo
+model SesionCaja {
+  id                String           @id @default(uuid()) @db.Uuid
+  tenantId          String           @map("tenant_id") @db.Uuid
+  cajaId            String           @map("caja_id") @db.Uuid
+  usuarioId         String           @map("usuario_id") @db.Uuid
+  estado            EstadoSesionCaja @default(ABIERTA)
+  montoApertura     Decimal          @map("monto_apertura") @db.Decimal(14, 2)
+  abiertaEn         DateTime         @default(now()) @map("abierta_en")
+  cerradaEn         DateTime?        @map("cerrada_en")
+  efectivoEsperado  Decimal?         @map("efectivo_esperado") @db.Decimal(14, 2)
+  efectivoDeclarado Decimal?         @map("efectivo_declarado") @db.Decimal(14, 2)
+  diferencia        Decimal?         @db.Decimal(14, 2)
+  /// Totales por medio de pago y por tipo de comprobante al cierre
+  resumen           Json?
+  observacion       String?
+
+  caja         Caja          @relation(fields: [cajaId], references: [id])
+  comprobantes Comprobante[]
+  cobranzas    Cobranza[]
+
+  @@index([tenantId])
+  @@index([cajaId, estado])
+  @@map("sesiones_caja")
+}
+
+/// Comprobante emitido en caja (factura, boleta, nota de venta o nota de crédito).
+/// Inmutable en sus importes: se anula (en el mismo turno) o se corrige con nota de crédito.
+model Comprobante {
+  id                     String            @id @default(uuid()) @db.Uuid
+  tenantId               String            @map("tenant_id") @db.Uuid
+  empresaId              String            @map("empresa_id") @db.Uuid
+  sedeId                 String            @map("sede_id") @db.Uuid
+  almacenId              String            @map("almacen_id") @db.Uuid
+  cajaId                 String            @map("caja_id") @db.Uuid
+  sesionCajaId           String            @map("sesion_caja_id") @db.Uuid
+  tipo                   TipoComprobante
+  serie                  String
+  numero                 Int
+  fechaEmision           DateTime          @default(now()) @map("fecha_emision")
+  moneda                 String            @default("PEN")
+  clienteId              String?           @map("cliente_id") @db.Uuid
+  clienteTipoDocumento   TipoDocIdentidad  @map("cliente_tipo_documento")
+  clienteNumeroDocumento String            @map("cliente_numero_documento")
+  clienteNombre          String            @map("cliente_nombre")
+  clienteDireccion       String?           @map("cliente_direccion")
+  opGravada              Decimal           @default(0) @map("op_gravada") @db.Decimal(14, 2)
+  opExonerada            Decimal           @default(0) @map("op_exonerada") @db.Decimal(14, 2)
+  opInafecta             Decimal           @default(0) @map("op_inafecta") @db.Decimal(14, 2)
+  igv                    Decimal           @default(0) @db.Decimal(14, 2)
+  descuentoTotal         Decimal           @default(0) @map("descuento_total") @db.Decimal(14, 2)
+  /// Parte de descuentoTotal que vino de un descuento sobre toda la venta (prorrateado en las líneas)
+  descuentoGlobal        Decimal           @default(0) @map("descuento_global") @db.Decimal(14, 2)
+  total                  Decimal           @db.Decimal(14, 2)
+  formaPago              FormaPago         @default(CONTADO) @map("forma_pago")
+  /// Crédito: monto financiado (total − pago inicial) y lo que aún se debe
+  montoCredito           Decimal           @default(0) @map("monto_credito") @db.Decimal(14, 2)
+  saldoPendiente         Decimal           @default(0) @map("saldo_pendiente") @db.Decimal(14, 2)
+  /// Nota de crédito sobre una venta al crédito: parte que redujo la deuda (no se reembolsó)
+  aplicadoASaldo         Decimal           @default(0) @map("aplicado_a_saldo") @db.Decimal(14, 2)
+  /// Supervisor que autorizó un descuento sobre el tope o un crédito fuera de límite
+  autorizadoPorId        String?           @map("autorizado_por_id") @db.Uuid
+  autorizacion           String?
+  montoRecibido          Decimal?          @map("monto_recibido") @db.Decimal(14, 2)
+  vuelto                 Decimal           @default(0) @db.Decimal(14, 2)
+  estado                 EstadoComprobante @default(EMITIDO)
+  estadoSunat            EstadoSunat       @map("estado_sunat")
+  /// Nota de crédito: comprobante que modifica y motivo (catálogo 09)
+  referenciaId           String?           @map("referencia_id") @db.Uuid
+  motivoCodigo           String?           @map("motivo_codigo")
+  motivoDescripcion      String?           @map("motivo_descripcion")
+  movimientoId           String?           @unique @map("movimiento_id") @db.Uuid
+  movimientoAnulacionId  String?           @map("movimiento_anulacion_id") @db.Uuid
+  usuarioId              String            @map("usuario_id") @db.Uuid
+  anuladoPorId           String?           @map("anulado_por_id") @db.Uuid
+  anuladoEn              DateTime?         @map("anulado_en")
+  motivoAnulacion        String?           @map("motivo_anulacion")
+  observacion            String?
+  creadoEn               DateTime          @default(now()) @map("creado_en")
+
+  empresa      Empresa              @relation(fields: [empresaId], references: [id])
+  caja         Caja                 @relation(fields: [cajaId], references: [id])
+  sesion       SesionCaja           @relation(fields: [sesionCajaId], references: [id])
+  cliente      Cliente?             @relation(fields: [clienteId], references: [id])
+  referencia   Comprobante?         @relation("NotaCredito", fields: [referenciaId], references: [id])
+  notasCredito Comprobante[]        @relation("NotaCredito")
+  movimiento   Movimiento?          @relation("MovimientoComprobante", fields: [movimientoId], references: [id])
+  detalles     ComprobanteDetalle[]
+  pagos        ComprobantePago[]
+  cuotas       ComprobanteCuota[]
+  cobranzas    Cobranza[]
+
+  @@unique([empresaId, serie, numero])
+  @@index([clienteId, saldoPendiente])
+  @@index([tenantId])
+  @@index([empresaId, fechaEmision])
+  @@index([sesionCajaId])
+  @@map("comprobantes")
+}
+
+model ComprobanteDetalle {
+  id             String  @id @default(uuid()) @db.Uuid
+  tenantId       String  @map("tenant_id") @db.Uuid
+  comprobanteId  String  @map("comprobante_id") @db.Uuid
+  productoId     String  @map("producto_id") @db.Uuid
+  /// Copia de la descripción y unidad al momento de emitir (el comprobante no cambia si el producto cambia)
+  descripcion    String
+  unidadCodigo   String  @map("unidad_codigo")
+  cantidad       Decimal @db.Decimal(18, 4)
+  /// Precio unitario CON IGV
+  precioUnitario Decimal @map("precio_unitario") @db.Decimal(14, 4)
+  /// Valor unitario SIN IGV
+  valorUnitario  Decimal @map("valor_unitario") @db.Decimal(18, 6)
+  descuento      Decimal @default(0) @db.Decimal(14, 2)
+  afectacionIgv  String  @map("afectacion_igv")
+  /// Valor de venta (sin IGV), IGV y total (con IGV) de la línea
+  valorVenta     Decimal @map("valor_venta") @db.Decimal(14, 2)
+  igv            Decimal @db.Decimal(14, 2)
+  total          Decimal @db.Decimal(14, 2)
+
+  comprobante Comprobante @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+  producto    Producto    @relation(fields: [productoId], references: [id])
+
+  @@index([tenantId])
+  @@index([comprobanteId])
+  @@map("comprobante_detalles")
+}
+
+/// Pagos (ventas, positivos) o reembolsos (notas de crédito, negativos)
+model ComprobantePago {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  comprobanteId String    @map("comprobante_id") @db.Uuid
+  medio         MedioPago
+  monto         Decimal   @db.Decimal(14, 2)
+  referencia    String?
+
+  comprobante Comprobante @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([comprobanteId])
+  @@map("comprobante_pagos")
+}
+
+/// Cuotas de una venta al crédito (obligatorias en la factura al crédito según SUNAT)
+model ComprobanteCuota {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  comprobanteId    String   @map("comprobante_id") @db.Uuid
+  numero           Int
+  monto            Decimal  @db.Decimal(14, 2)
+  fechaVencimiento DateTime @map("fecha_vencimiento") @db.Date
+
+  comprobante Comprobante @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+
+  @@unique([comprobanteId, numero])
+  @@index([tenantId])
+  @@map("comprobante_cuotas")
+}
+
+/// Pago de un cliente a cuenta de una venta al crédito
+model Cobranza {
+  id              String         @id @default(uuid()) @db.Uuid
+  tenantId        String         @map("tenant_id") @db.Uuid
+  empresaId       String         @map("empresa_id") @db.Uuid
+  clienteId       String         @map("cliente_id") @db.Uuid
+  comprobanteId   String         @map("comprobante_id") @db.Uuid
+  /// Si se cobró en caja, entra al arqueo de ese turno
+  sesionCajaId    String?        @map("sesion_caja_id") @db.Uuid
+  numero          Int
+  fecha           DateTime       @default(now())
+  medio           MedioPago
+  monto           Decimal        @db.Decimal(14, 2)
+  referencia      String?
+  observacion     String?
+  estado          EstadoCobranza @default(VIGENTE)
+  usuarioId       String         @map("usuario_id") @db.Uuid
+  anuladoPorId    String?        @map("anulado_por_id") @db.Uuid
+  anuladoEn       DateTime?      @map("anulado_en")
+  motivoAnulacion String?        @map("motivo_anulacion")
+
+  empresa     Empresa     @relation(fields: [empresaId], references: [id])
+  cliente     Cliente     @relation(fields: [clienteId], references: [id])
+  comprobante Comprobante @relation(fields: [comprobanteId], references: [id])
+  sesion      SesionCaja? @relation(fields: [sesionCajaId], references: [id])
+
+  @@unique([empresaId, numero])
+  @@index([tenantId])
+  @@index([clienteId])
+  @@index([comprobanteId])
+  @@index([sesionCajaId])
+  @@map("cobranzas")
 }

@@ -92,6 +92,11 @@ MAIL_FROM="Kardex <no-reply@codecraft.net.pe>"
 
 REPORTES_DIR=/app/storage/reportes
 REPORTES_WORKER_EMBEBIDO=true
+
+# Opcional: consulta de DNI/RUC para autocompletar clientes (decolecta | apisnetpe).
+# El token se queda en el servidor; sin él, el botón RENIEC/SUNAT no aparece.
+CONSULTA_DOC_PROVEEDOR=
+CONSULTA_DOC_TOKEN=
 ```
 
 > Si una contraseña tiene caracteres especiales (`@ : / ? # %`), escríbala codificada en la URL

@@ -33,6 +33,7 @@ const esquema = z.object({
   categoriaId: z.uuid().nullish().transform((v) => v || null),
   unidadId: z.uuid(),
   precioReferencial: z.coerce.number().min(0).nullish().transform((v) => (v === undefined ? null : v)),
+  afectacionIgv: z.enum(['10', '20', '30']).default('10'),
 });
 
 async function validarReferencias(tx, empresaId, { categoriaId, unidadId }) {

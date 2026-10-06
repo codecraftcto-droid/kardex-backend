@@ -196,6 +196,8 @@ router.get('/movimientos/:movimientoId', autorizar('kardex.stock.ver', { alcance
         anula: { select: { id: true, numero: true } },
         anuladoPor: { select: { id: true, numero: true, fecha: true } },
         documentoComercial: { select: { id: true, tipo: true, serie: true, numero: true } },
+        // Venta o nota de crédito del punto de venta que generó el movimiento
+        comprobante: { select: { id: true, tipo: true, serie: true, numero: true } },
         transferencia: { select: { id: true, numero: true } },
         detalles: {
           orderBy: { id: 'asc' },

@@ -21,6 +21,7 @@ const esquema = z.object({
   email: z.union([z.email(), z.literal('')]).nullish().transform((v) => v || null),
   telefono: textoOpcional(30),
   direccion: textoOpcional(255),
+  nombreComercial: textoOpcional(150),
   metodoValorizacion: z.enum(['PEPS', 'PROMEDIO']).default('PROMEDIO'),
 });
 

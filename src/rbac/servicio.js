@@ -1,7 +1,7 @@
 import { withTenant } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
 import { conflicto } from '../lib/errors.js';
-import { CATALOGO_PERMISOS, PERMISO_ADMIN } from './catalogo.js';
+import { CATALOGO_PERMISOS, PERMISO_ADMIN, PERMISOS_OPERADOR } from './catalogo.js';
 import { construirPermisos } from './resolver.js';
 import { reevaluarSalasUsuario } from '../realtime/socket.js';
 
@@ -69,6 +69,7 @@ export async function calcularPermisos(tx, usuarioId) {
     tipoUsuario: usuario.tipo,
     empresaCliente: usuario.empresaId,
     permisosLectura: PERMISOS_LECTURA,
+    permisosOperador: PERMISOS_OPERADOR,
     asignaciones: asignaciones
       .map((a) => ({ alcance: alcanceDe(a), permisos: a.rol.permisos.map((rp) => rp.permiso.codigo) }))
       .filter((a) => a.alcance),

@@ -275,6 +275,46 @@ async function asegurarPlataforma(tenantId) {
   console.log('✔ Planes: Básico, Profesional (estudio demo) y Corporativo');
 }
 
+/** Punto de venta demo (Comercial Andina): una caja con series, clientes y un cajero operador. */
+async function asegurarPuntoVenta(tenantId, roles, { empresa, almacenes }) {
+  if (await prisma.caja.count({ where: { empresaId: empresa.id } })) return;
+  const alm = almacenes.ALM01;
+  await prisma.empresa.update({ where: { id: empresa.id }, data: { nombreComercial: 'Minimarket Andina', direccion: 'Av. Javier Prado 1234, San Isidro, Lima' } });
+  await prisma.caja.create({
+    data: {
+      tenantId, empresaId: empresa.id, sedeId: alm.sedeId, almacenId: alm.id, nombre: 'Caja 1',
+      serieFactura: 'F001', serieBoleta: 'B001', serieNotaVenta: 'NV01', serieNotaCreditoFactura: 'FC01', serieNotaCreditoBoleta: 'BC01',
+    },
+  });
+  await prisma.cliente.createMany({
+    data: [
+      { tenantId, empresaId: empresa.id, tipoDocumento: 'RUC', numeroDocumento: '20131312955', nombre: 'Distribuidora Los Andes S.A.C.', direccion: 'Jr. Ucayali 456, Lima', email: 'compras@losandes.pe' },
+      { tenantId, empresaId: empresa.id, tipoDocumento: 'DNI', numeroDocumento: '45678912', nombre: 'Carmen Rojas Huamán' },
+    ],
+  });
+  if (!(await prisma.usuario.findUnique({ where: { email: 'cajero@kardex.local' } }))) {
+    await prisma.usuario.create({
+      data: {
+        tenantId, email: 'cajero@kardex.local', nombres: 'Rosa Mendoza (cajera)', cargo: 'Cajera', tipo: 'operador', empresaId: empresa.id,
+        estado: 'activo', passwordHash: await hash(DEMO_PASSWORD),
+        asignaciones: { create: { tenantId, rolId: roles.Cajero.id, alcanceTipo: 'almacen', alcanceId: alm.id } },
+      },
+    });
+  }
+  console.log(`✔ Punto de venta demo: Caja 1 (F001/B001/NV01), 2 clientes y cajero@kardex.local / ${DEMO_PASSWORD}`);
+}
+
+/** Crédito demo: Carmen Rojas compra al crédito (tope S/ 500, 30 días) y tiene RUC 10 para facturas. */
+async function asegurarCreditoDemo(empresa) {
+  const carmen = await prisma.cliente.findFirst({ where: { empresaId: empresa.id, numeroDocumento: '45678912' } });
+  if (!carmen || carmen.creditoHabilitado) return;
+  await prisma.cliente.update({
+    where: { id: carmen.id },
+    data: { creditoHabilitado: true, limiteCredito: 500, diasCredito: 30, rucAsociado: '10456789124', telefono: '987654321' },
+  });
+  console.log('✔ Cliente con crédito demo: Carmen Rojas (límite S/ 500, 30 días, RUC 10456789124)');
+}
+
 async function main() {
   await sincronizarCatalogo(prisma);
   console.log('✔ Catálogo de permisos sincronizado');
@@ -294,6 +334,9 @@ async function main() {
   await asegurarTransferencias(tenantId, admin.id, rSur);
   await asegurarDocumentos(tenantId, admin.id, rAndina);
   await asegurarPlataforma(tenantId);
+  const rolesActuales = Object.fromEntries((await prisma.rol.findMany({ where: { tenantId } })).map((r) => [r.nombre, r]));
+  await asegurarPuntoVenta(tenantId, rolesActuales, rAndina);
+  await asegurarCreditoDemo(rAndina.empresa);
 
   // Portal cliente: solo lectura de su empresa (con excepción para exportar reportes)
   if (!(await prisma.usuario.findUnique({ where: { email: 'cliente@kardex.local' } }))) {

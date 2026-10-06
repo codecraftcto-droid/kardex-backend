@@ -5,7 +5,7 @@ import { validar } from '../../middleware/validar.js';
 import { email } from '../../lib/esquemas.js';
 import { puedeEnAlcance } from '../../rbac/resolver.js';
 import { invalidarPermisos, verificarAdministradorRestante } from '../../rbac/servicio.js';
-import { CATALOGO_PERMISOS } from '../../rbac/catalogo.js';
+import { CATALOGO_PERMISOS, PERMISOS_OPERADOR } from '../../rbac/catalogo.js';
 import { auditar } from '../../services/auditoria.js';
 import { enviarInvitacion } from '../../services/correo.js';
 import { revocarSesiones, revocarSesionesUsuario } from '../../services/sesiones.js';
@@ -62,14 +62,26 @@ function validarGestionSobre(req, objetivo, destino) {
   if (!puedeEnAlcance(req.permisos, 'usuarios.roles.gestionar', destino)) throw noEncontrado('Alcance no encontrado');
 }
 
-/** Portal cliente: solo lectura y solo sobre su propia empresa. */
+/**
+ * Usuarios de la empresa cliente, siempre dentro de su propia empresa:
+ *  - cliente (portal): solo lectura
+ *  - operador (caja): lectura + punto de venta y clientes
+ */
 function validarReglasCliente(objetivo, destino, codigos) {
-  if (objetivo.tipo !== 'cliente') return;
+  if (objetivo.tipo === 'interno') return;
+  const etiqueta = objetivo.tipo === 'cliente' ? 'cliente' : 'operador';
   if (destino.tipo === 'estudio' || destino.empresaId !== objetivo.empresaId) {
-    throw solicitudInvalida('Un usuario cliente solo puede tener alcance dentro de su propia empresa');
+    throw solicitudInvalida(`Un usuario ${etiqueta} solo puede tener alcance dentro de su propia empresa`);
   }
-  const escritura = codigos.filter((c) => !PERMISOS_LECTURA.has(c));
-  if (escritura.length) throw solicitudInvalida(`Un usuario cliente solo puede tener permisos de lectura: ${escritura.join(', ')}`);
+  const permitidos = objetivo.tipo === 'cliente' ? PERMISOS_LECTURA : PERMISOS_OPERADOR;
+  const fuera = codigos.filter((c) => !permitidos.has(c));
+  if (fuera.length) {
+    throw solicitudInvalida(
+      objetivo.tipo === 'cliente'
+        ? `Un usuario cliente solo puede tener permisos de lectura: ${fuera.join(', ')}`
+        : `Un usuario operador solo puede tener permisos de lectura, caja y clientes: ${fuera.join(', ')}`,
+    );
+  }
 }
 
 // ───────────── CRUD ─────────────
@@ -81,7 +93,7 @@ router.get(
     z.object({
       q: z.string().trim().max(100).optional(),
       estado: z.enum(['pendiente', 'activo', 'suspendido']).optional(),
-      tipo: z.enum(['interno', 'cliente']).optional(),
+      tipo: z.enum(['interno', 'cliente', 'operador']).optional(),
       pagina: z.string().optional(),
       porPagina: z.string().optional(),
     }),
@@ -158,13 +170,13 @@ router.post(
       .object({
         ...esquemaDatos,
         email: email(),
-        tipo: z.enum(['interno', 'cliente']).default('interno'),
+        tipo: z.enum(['interno', 'cliente', 'operador']).default('interno'),
         empresaId: uuid.nullish(),
       })
-      .refine((v) => v.tipo !== 'cliente' || v.empresaId, { message: 'Un usuario cliente requiere empresa', path: ['empresaId'] }),
+      .refine((v) => v.tipo === 'interno' || v.empresaId, { message: 'Los usuarios cliente y operador requieren empresa', path: ['empresaId'] }),
   ),
   async (req, res) => {
-    const datos = { ...req.body, empresaId: req.body.tipo === 'cliente' ? req.body.empresaId : null };
+    const datos = { ...req.body, empresaId: req.body.tipo === 'interno' ? null : req.body.empresaId };
     const { usuario, token } = await req.db(async (tx) => {
       if (datos.empresaId && !(await tx.empresa.findUnique({ where: { id: datos.empresaId } }))) {
         throw solicitudInvalida('Empresa no encontrada');

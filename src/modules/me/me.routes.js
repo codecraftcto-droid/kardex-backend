@@ -40,7 +40,7 @@ router.get('/contexto', async (req, res) => {
   const empresas = await req.db((tx) =>
     tx.empresa.findMany({
       where: { activo: true, ...(acceso === 'todas' ? {} : { id: { in: acceso } }) },
-      select: { id: true, razonSocial: true, ruc: true },
+      select: { id: true, razonSocial: true, ruc: true, metodoValorizacion: true },
       orderBy: { razonSocial: 'asc' },
     }),
   );

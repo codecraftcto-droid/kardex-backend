@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { puede, tieneAlguno, whereAlcance } from '../rbac/resolver.js';
+import { puede, puedeDentroDeEmpresa, tieneAlguno, whereAlcance } from '../rbac/resolver.js';
+import { estadoCuotas, hoyLima, tramoAntiguedad } from '../pos/reglas.js';
 import { noEncontrado, prohibido } from '../lib/errors.js';
 import { texto } from './escritores.js';
 
@@ -478,7 +479,289 @@ const kardex = {
   },
 };
 
-export const REPORTES = { stock, movimientos, valorizacion, transferencias, kardex };
+// ═════════════ Registro de Ventas (columnas del formato 14.1) ═════════════
+
+const COD_DOC = { SIN_DOCUMENTO: '0', DNI: '1', CARNE_EXTRANJERIA: '4', RUC: '6', PASAPORTE: '7' };
+const COD_CPE = { FACTURA: '01', BOLETA: '03', NOTA_CREDITO: '07', NOTA_VENTA: '00' };
+
+const ventas = {
+  permisos: ['reporte.ventas.ver'],
+  esquema: z.object({
+    ...base,
+    desde: z.coerce.date(),
+    hasta: z.coerce.date(),
+    incluirNotasVenta: z.enum(['true', 'false']).default('false'),
+  }),
+  async preparar({ db, permisos, q }) {
+    const ctx = await contexto(db, permisos, { empresaId: q.empresaId });
+    const alcance = whereAlcance(permisos, 'reporte.ventas.ver', 'registro') ?? { id: null };
+    const tipos = ['FACTURA', 'BOLETA', 'NOTA_CREDITO', ...(q.incluirNotasVenta === 'true' ? ['NOTA_VENTA'] : [])];
+    const whereCpe = { AND: [alcance, { empresaId: q.empresaId, tipo: { in: tipos }, fechaEmision: { gte: q.desde, lte: q.hasta } }] };
+    const whereDoc = { AND: [alcance, { empresaId: q.empresaId, tipo: 'VENTA', estado: { in: ['CONFIRMADO', 'ANULADO'] }, fechaEmision: { gte: q.desde, lte: q.hasta } }] };
+    const signo = (v, neg) => (v == null ? null : neg ? D(v).neg() : D(v));
+
+    async function* lotes() {
+      // 1) Comprobantes emitidos en caja
+      for await (const cs of porDesplazamiento(db, (tx, pagina) =>
+        tx.comprobante.findMany({
+          where: whereCpe,
+          include: { referencia: { select: { tipo: true, serie: true, numero: true, fechaEmision: true } } },
+          orderBy: [{ fechaEmision: 'asc' }, { serie: 'asc' }, { numero: 'asc' }],
+          ...pagina,
+        }),
+      )) {
+        yield cs.map((c) => {
+          const anulado = c.estado === 'ANULADO';
+          const nc = c.tipo === 'NOTA_CREDITO';
+          const monto = (v) => (anulado ? D(0) : signo(v, nc));
+          return {
+            fecha: c.fechaEmision, tipo: COD_CPE[c.tipo], serie: c.serie, numero: String(c.numero).padStart(8, '0'),
+            tipoDoc: COD_DOC[c.clienteTipoDocumento], numDoc: c.clienteNumeroDocumento === '-' ? '' : c.clienteNumeroDocumento,
+            cliente: anulado ? 'ANULADO' : c.clienteNombre,
+            gravada: monto(c.opGravada), exonerada: monto(c.opExonerada), inafecta: monto(c.opInafecta), igv: monto(c.igv), total: monto(c.total),
+            moneda: c.moneda, estado: anulado ? 'Anulado' : 'Emitido',
+            referencia: c.referencia ? `${COD_CPE[c.referencia.tipo]} ${c.referencia.serie}-${String(c.referencia.numero).padStart(8, '0')}` : '',
+            origen: 'Caja',
+          };
+        });
+      }
+      // 2) Ventas registradas manualmente (comprobantes emitidos en otro sistema), convertidas a soles
+      for await (const ds of porDesplazamiento(db, (tx, pagina) =>
+        tx.documentoComercial.findMany({ where: whereDoc, include: { detalles: true }, orderBy: [{ fechaEmision: 'asc' }, { serie: 'asc' }], ...pagina }),
+      )) {
+        yield ds.map((d) => {
+          const anulado = d.estado === 'ANULADO';
+          const tc = D(d.tipoCambio);
+          const enSoles = (v) => (anulado ? D(0) : D(v).mul(tc).toDecimalPlaces(2));
+          const gravada = d.detalles.filter((x) => x.afectoIgv).reduce((s, x) => s.add(x.subtotal), D(0));
+          const exonerada = d.detalles.filter((x) => !x.afectoIgv).reduce((s, x) => s.add(x.subtotal), D(0));
+          return {
+            fecha: d.fechaEmision, tipo: COD_CPE[d.comprobanteTipo] ?? '00', serie: d.serie, numero: d.numero.padStart(8, '0'),
+            tipoDoc: d.terceroDocumento.length === 11 ? '6' : d.terceroDocumento.length === 8 ? '1' : '0', numDoc: d.terceroDocumento,
+            cliente: anulado ? 'ANULADO' : d.terceroNombre,
+            gravada: enSoles(gravada), exonerada: enSoles(exonerada), inafecta: D(0), igv: enSoles(d.igv), total: enSoles(d.total),
+            moneda: d.moneda, estado: anulado ? 'Anulado' : 'Emitido', referencia: '', origen: 'Registro manual',
+          };
+        });
+      }
+    }
+    return {
+      meta: {
+        titulo: 'Registro de Ventas e Ingresos',
+        subtitulo: ctx.encabezado(`Del ${fechaCorta(q.desde)} al ${fechaCorta(q.hasta)} · Importes en soles (las notas de crédito restan)`),
+        nombreArchivo: `registro-ventas-${hoyArchivo()}`,
+        verCostos: false,
+        columnas: [
+          { clave: 'fecha', titulo: 'Fecha emisión', tipo: 'fecha', ancho: 7 },
+          { clave: 'tipo', titulo: 'Tipo', ancho: 3 },
+          { clave: 'serie', titulo: 'Serie', ancho: 4 },
+          { clave: 'numero', titulo: 'Número', ancho: 6 },
+          { clave: 'tipoDoc', titulo: 'T. doc.', ancho: 3 },
+          { clave: 'numDoc', titulo: 'Nº documento', ancho: 7 },
+          { clave: 'cliente', titulo: 'Cliente', ancho: 16 },
+          { clave: 'gravada', titulo: 'Base gravada', tipo: 'moneda', ancho: 7, sumar: true },
+          { clave: 'exonerada', titulo: 'Exonerada', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'inafecta', titulo: 'Inafecta', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'igv', titulo: 'IGV', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'total', titulo: 'Total', tipo: 'moneda', ancho: 7, sumar: true },
+          { clave: 'estado', titulo: 'Estado', ancho: 5 },
+          { clave: 'referencia', titulo: 'Doc. modificado', ancho: 8 },
+          { clave: 'origen', titulo: 'Origen', ancho: 6 },
+        ],
+        totales: { clave: 'cliente', texto: 'Totales' },
+      },
+      lotes,
+      contar: async () => (await db((tx) => tx.comprobante.count({ where: whereCpe }))) + (await db((tx) => tx.documentoComercial.count({ where: whereDoc }))),
+    };
+  },
+};
+
+// ═════════════ Turnos de caja (arqueos) ═════════════
+
+const MEDIOS = ['EFECTIVO', 'TARJETA', 'YAPE', 'PLIN', 'TRANSFERENCIA', 'OTRO'];
+const caja = {
+  permisos: ['reporte.ventas.ver'],
+  esquema: z.object({ ...base, desde: z.coerce.date(), hasta: z.coerce.date() }),
+  async preparar({ db, permisos, q }) {
+    const ctx = await contexto(db, permisos, { empresaId: q.empresaId });
+    const alcance = whereAlcance(permisos, 'reporte.ventas.ver', 'registro') ?? { id: null };
+    const where = { estado: 'CERRADA', abiertaEn: { gte: q.desde, lte: q.hasta }, caja: { AND: [alcance, { empresaId: q.empresaId }] } };
+    async function* lotes() {
+      for await (const ss of porDesplazamiento(db, (tx, pagina) =>
+        tx.sesionCaja.findMany({ where, include: { caja: { select: { nombre: true } } }, orderBy: { abiertaEn: 'asc' }, ...pagina }),
+      )) {
+        const usuarios = new Map(
+          (await db((tx) => tx.usuario.findMany({ where: { id: { in: ss.map((s) => s.usuarioId) } }, select: { id: true, nombres: true } }))).map((u) => [u.id, u.nombres]),
+        );
+        yield ss.map((s) => {
+          const r = s.resumen ?? {};
+          const comprobantes = Object.values(r.porTipo ?? {}).reduce((n, t) => n + t.cantidad, 0);
+          return {
+            caja: s.caja.nombre, cajero: usuarios.get(s.usuarioId), apertura: s.abiertaEn, cierre: s.cerradaEn, comprobantes,
+            ventas: D(r.ventasNetas), credito: r.ventasCredito != null ? D(r.ventasCredito) : null,
+            cobranzas: r.cobranzas ? D(r.cobranzas.total) : null, ...Object.fromEntries(MEDIOS.map((m) => [m.toLowerCase(), r.porMedio?.[m] != null ? D(r.porMedio[m]) : null])),
+            esperado: s.efectivoEsperado, declarado: s.efectivoDeclarado, diferencia: s.diferencia,
+          };
+        });
+      }
+    }
+    return {
+      meta: {
+        titulo: 'Turnos de caja y arqueos',
+        subtitulo: ctx.encabezado(`Turnos cerrados del ${fechaCorta(q.desde)} al ${fechaCorta(q.hasta)}`),
+        nombreArchivo: `turnos-caja-${hoyArchivo()}`,
+        verCostos: false,
+        columnas: [
+          { clave: 'caja', titulo: 'Caja', ancho: 8 },
+          { clave: 'cajero', titulo: 'Cajero', ancho: 11 },
+          { clave: 'apertura', titulo: 'Apertura', tipo: 'fechaHora', ancho: 8 },
+          { clave: 'cierre', titulo: 'Cierre', tipo: 'fechaHora', ancho: 8 },
+          { clave: 'comprobantes', titulo: 'Comp.', ancho: 4 },
+          { clave: 'ventas', titulo: 'Ventas netas', tipo: 'moneda', ancho: 7, sumar: true },
+          { clave: 'credito', titulo: 'Al crédito', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'cobranzas', titulo: 'Cobranzas', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'efectivo', titulo: 'Efectivo', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'tarjeta', titulo: 'Tarjeta', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'yape', titulo: 'Yape', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'plin', titulo: 'Plin', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'transferencia', titulo: 'Transf.', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'esperado', titulo: 'Efectivo esperado', tipo: 'moneda', ancho: 7 },
+          { clave: 'declarado', titulo: 'Declarado', tipo: 'moneda', ancho: 7 },
+          { clave: 'diferencia', titulo: 'Diferencia', tipo: 'moneda', ancho: 6, sumar: true },
+        ],
+        totales: { clave: 'cajero', texto: 'Totales' },
+      },
+      lotes,
+      contar: () => db((tx) => tx.sesionCaja.count({ where })),
+    };
+  },
+};
+
+// ═════════════ Cuentas por cobrar (antigüedad de saldos) ═════════════
+
+const MEDIO_TEXTO = { EFECTIVO: 'Efectivo', TARJETA: 'Tarjeta', YAPE: 'Yape', PLIN: 'Plin', TRANSFERENCIA: 'Transferencia', OTRO: 'Otro' };
+const numeroCpe = (c) => `${c.serie}-${String(c.numero).padStart(8, '0')}`;
+
+const cxc = {
+  permisos: ['reporte.cxc.ver'],
+  esquema: z.object({ ...base, soloVencidos: z.enum(['true', 'false']).default('false') }),
+  async preparar({ db, permisos, q }) {
+    // Las cuentas por cobrar son de toda la empresa (un cliente puede pagar en cualquier tienda)
+    if (!puedeDentroDeEmpresa(permisos, 'reporte.cxc.ver', q.empresaId)) throw noEncontrado();
+    const ctx = await contexto(db, permisos, { empresaId: q.empresaId });
+    const hoy = hoyLima();
+    const where = { empresaId: q.empresaId, estado: 'EMITIDO', formaPago: 'CREDITO', saldoPendiente: { gt: 0 } };
+    async function* lotes() {
+      for await (const cs of porDesplazamiento(db, (tx, pagina) =>
+        tx.comprobante.findMany({
+          where,
+          include: { cuotas: true, cliente: { select: { nombre: true, tipoDocumento: true, numeroDocumento: true } } },
+          orderBy: [{ cliente: { nombre: 'asc' } }, { fechaEmision: 'asc' }],
+          ...pagina,
+        }),
+      )) {
+        const filas = cs.map((c) => {
+          const cuotas = estadoCuotas(c.cuotas, c.montoCredito, c.saldoPendiente, hoy).filter((k) => k.pendiente.gt(0));
+          const tramos = { porVencer: D(0), d1_30: D(0), d31_60: D(0), d61_90: D(0), d90: D(0) };
+          for (const k of cuotas) tramos[tramoAntiguedad(k.diasVencido)] = tramos[tramoAntiguedad(k.diasVencido)].add(k.pendiente);
+          const dias = Math.max(0, ...cuotas.map((k) => k.diasVencido));
+          return {
+            cliente: c.cliente.nombre, documento: c.cliente.numeroDocumento, comprobante: numeroCpe(c), emision: c.fechaEmision,
+            vencimiento: cuotas.at(0)?.fechaVencimiento ? new Date(`${cuotas.at(0).fechaVencimiento}T00:00:00Z`) : null,
+            dias: dias || null, total: D(c.total), saldo: D(c.saldoPendiente), ...tramos,
+          };
+        });
+        yield q.soloVencidos === 'true' ? filas.filter((f) => f.dias) : filas;
+      }
+    }
+    return {
+      meta: {
+        titulo: 'Cuentas por cobrar — antigüedad de saldos',
+        subtitulo: ctx.encabezado(`Saldos al ${fechaCorta(new Date(`${hoy}T00:00:00Z`))}${q.soloVencidos === 'true' ? ' · solo documentos con cuotas vencidas' : ''}`),
+        nombreArchivo: `cuentas-por-cobrar-${hoyArchivo()}`,
+        verCostos: false,
+        columnas: [
+          { clave: 'cliente', titulo: 'Cliente', ancho: 14 },
+          { clave: 'documento', titulo: 'Documento', ancho: 7 },
+          { clave: 'comprobante', titulo: 'Comprobante', ancho: 8 },
+          { clave: 'emision', titulo: 'Emisión', tipo: 'fechaHora', ancho: 8 },
+          { clave: 'vencimiento', titulo: 'Vence', tipo: 'fecha', ancho: 6 },
+          { clave: 'dias', titulo: 'Días venc.', ancho: 4 },
+          { clave: 'total', titulo: 'Total', tipo: 'moneda', ancho: 6 },
+          { clave: 'saldo', titulo: 'Saldo', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'porVencer', titulo: 'Por vencer', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'd1_30', titulo: '1-30 días', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'd31_60', titulo: '31-60 días', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'd61_90', titulo: '61-90 días', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'd90', titulo: '+90 días', tipo: 'moneda', ancho: 6, sumar: true },
+        ],
+        totales: { clave: 'cliente', texto: 'Totales' },
+      },
+      lotes,
+      contar: () => db((tx) => tx.comprobante.count({ where })),
+    };
+  },
+};
+
+// ═════════════ Cobranzas ═════════════
+
+const cobranzas = {
+  permisos: ['reporte.cxc.ver'],
+  esquema: z.object({ ...base, desde: z.coerce.date(), hasta: z.coerce.date() }),
+  async preparar({ db, permisos, q }) {
+    if (!puedeDentroDeEmpresa(permisos, 'reporte.cxc.ver', q.empresaId)) throw noEncontrado();
+    const ctx = await contexto(db, permisos, { empresaId: q.empresaId });
+    const where = { empresaId: q.empresaId, fecha: { gte: q.desde, lte: q.hasta } };
+    async function* lotes() {
+      for await (const ks of porDesplazamiento(db, (tx, pagina) =>
+        tx.cobranza.findMany({
+          where,
+          include: {
+            cliente: { select: { nombre: true } },
+            comprobante: { select: { serie: true, numero: true } },
+            sesion: { select: { caja: { select: { nombre: true } } } },
+          },
+          orderBy: { numero: 'asc' },
+          ...pagina,
+        }),
+      )) {
+        const usuarios = new Map(
+          (await db((tx) => tx.usuario.findMany({ where: { id: { in: ks.map((k) => k.usuarioId) } }, select: { id: true, nombres: true } }))).map((u) => [u.id, u.nombres]),
+        );
+        yield ks.map((k) => ({
+          numero: k.numero, fecha: k.fecha, cliente: k.cliente.nombre, comprobante: numeroCpe(k.comprobante), medio: MEDIO_TEXTO[k.medio],
+          referencia: k.referencia ?? '', caja: k.sesion?.caja.nombre ?? 'Sin caja', usuario: usuarios.get(k.usuarioId),
+          monto: k.estado === 'ANULADA' ? D(0) : D(k.monto), estado: k.estado === 'ANULADA' ? 'Anulada' : 'Vigente',
+        }));
+      }
+    }
+    return {
+      meta: {
+        titulo: 'Cobranzas de ventas al crédito',
+        subtitulo: ctx.encabezado(`Del ${fechaCorta(q.desde)} al ${fechaCorta(q.hasta)} · las anuladas figuran en cero`),
+        nombreArchivo: `cobranzas-${hoyArchivo()}`,
+        verCostos: false,
+        columnas: [
+          { clave: 'numero', titulo: 'Nº', ancho: 4 },
+          { clave: 'fecha', titulo: 'Fecha', tipo: 'fechaHora', ancho: 8 },
+          { clave: 'cliente', titulo: 'Cliente', ancho: 14 },
+          { clave: 'comprobante', titulo: 'Comprobante', ancho: 8 },
+          { clave: 'medio', titulo: 'Medio', ancho: 6 },
+          { clave: 'referencia', titulo: 'Referencia', ancho: 6 },
+          { clave: 'caja', titulo: 'Caja', ancho: 6 },
+          { clave: 'usuario', titulo: 'Registró', ancho: 9 },
+          { clave: 'monto', titulo: 'Monto', tipo: 'moneda', ancho: 6, sumar: true },
+          { clave: 'estado', titulo: 'Estado', ancho: 5 },
+        ],
+        totales: { clave: 'cliente', texto: 'Totales' },
+      },
+      lotes,
+      contar: () => db((tx) => tx.cobranza.count({ where })),
+    };
+  },
+};
+
+export const REPORTES = { stock, movimientos, valorizacion, transferencias, kardex, ventas, caja, cxc, cobranzas };
 
 /** Permisos mínimos del reporte (en algún alcance); el alcance fino se aplica al filtrar filas. */
 export function validarPermisos(permisos, def) {

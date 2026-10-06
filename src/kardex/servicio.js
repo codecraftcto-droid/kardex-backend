@@ -9,14 +9,23 @@ export const MOTIVOS = {
 const PREFIJO = { ENTRADA: 'E', SALIDA: 'S', TRANSFERENCIA: 'T' };
 const MOTIVOS_TRANSFERENCIA = ['TRANSFERENCIA_SALIDA', 'TRANSFERENCIA_ENTRADA'];
 
-/** Siguiente número correlativo de la empresa, atómico (INSERT … ON CONFLICT … RETURNING). */
-export async function siguienteNumero(tx, { tenantId, empresaId, tipo }) {
+/**
+ * Siguiente valor de un correlativo de la empresa, atómico (INSERT … ON CONFLICT … RETURNING).
+ * Dentro de la transacción: si esta falla, el número no se consume.
+ */
+export async function siguienteValor(tx, { tenantId, empresaId, clave }) {
   const [fila] = await tx.$queryRaw`
     INSERT INTO correlativos (tenant_id, empresa_id, tipo, ultimo)
-    VALUES (${tenantId}::uuid, ${empresaId}::uuid, ${tipo}, 1)
+    VALUES (${tenantId}::uuid, ${empresaId}::uuid, ${clave}, 1)
     ON CONFLICT (empresa_id, tipo) DO UPDATE SET ultimo = correlativos.ultimo + 1
     RETURNING ultimo`;
-  return `${PREFIJO[tipo]}-${String(fila.ultimo).padStart(6, '0')}`;
+  return fila.ultimo;
+}
+
+/** Número de movimiento o transferencia: E-000001, S-000001, T-000001. */
+export async function siguienteNumero(tx, { tenantId, empresaId, tipo }) {
+  const valor = await siguienteValor(tx, { tenantId, empresaId, clave: tipo });
+  return `${PREFIJO[tipo]}-${String(valor).padStart(6, '0')}`;
 }
 
 /**
@@ -177,10 +186,13 @@ export async function registrarMovimiento(tx, datos) {
 export async function anularMovimiento(tx, { tenantId, movimientoId, usuarioId, observacion, desdeDocumento = false }) {
   const original = await tx.movimiento.findUnique({
     where: { id: movimientoId },
-    include: { detalles: true, anuladoPor: { select: { numero: true } }, documentoComercial: { select: { tipo: true } } },
+    include: { detalles: true, anuladoPor: { select: { numero: true } }, documentoComercial: { select: { tipo: true } }, comprobante: { select: { serie: true, numero: true } } },
   });
   if (!original) throw noEncontrado();
   if (original.motivo === 'ANULACION') throw conflicto('Una anulación no se puede anular; registre un nuevo movimiento');
+  if (original.comprobante && !desdeDocumento) {
+    throw conflicto(`Este movimiento proviene del comprobante ${original.comprobante.serie}-${original.comprobante.numero}; anúlelo o emita una nota de crédito desde Comprobantes`);
+  }
   if (original.documentoComercial && !desdeDocumento) {
     throw conflicto(`Este movimiento proviene de una ${original.documentoComercial.tipo === 'COMPRA' ? 'compra' : 'venta'}; anúlela desde el documento`);
   }

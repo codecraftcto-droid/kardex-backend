@@ -62,10 +62,32 @@ const definiciones = [
   ['ventas', 'ventas.venta.aprobar', 'Confirmar ventas (genera la salida de kardex)'],
   ['ventas', 'ventas.venta.anular', 'Anular ventas confirmadas', true],
 
+  ['clientes', 'clientes.cliente.ver', 'Ver clientes'],
+  ['clientes', 'clientes.cliente.crear', 'Registrar clientes'],
+  ['clientes', 'clientes.cliente.editar', 'Editar clientes'],
+  ['clientes', 'clientes.cliente.eliminar', 'Eliminar clientes'],
+  ['clientes', 'clientes.credito.configurar', 'Habilitar crédito a clientes y fijar su límite', true],
+
+  ['pos', 'pos.caja.configurar', 'Configurar cajas y sus series', true],
+  ['pos', 'pos.caja.ver', 'Ver turnos y arqueos de caja'],
+  ['pos', 'pos.venta.crear', 'Abrir y cerrar turno de caja y vender'],
+  ['pos', 'pos.venta.ver', 'Ver comprobantes emitidos'],
+  ['pos', 'pos.venta.anular', 'Anular comprobantes del turno', true],
+  ['pos', 'pos.notacredito.crear', 'Emitir notas de crédito (devoluciones)', true],
+  ['pos', 'pos.venta.credito', 'Vender al crédito a clientes habilitados'],
+  ['pos', 'pos.descuento.autorizar', 'Autorizar descuentos sobre el tope de la caja', true],
+
+  ['cxc', 'cxc.cuenta.ver', 'Ver cuentas por cobrar y estados de cuenta'],
+  ['cxc', 'cxc.cobranza.crear', 'Registrar cobranzas de ventas al crédito'],
+  ['cxc', 'cxc.cobranza.anular', 'Anular cobranzas', true],
+  ['cxc', 'cxc.credito.autorizar', 'Autorizar créditos sobre el límite o con deuda vencida', true],
+
   ['reporte', 'reporte.stock.ver', 'Reporte de stock'],
   ['reporte', 'reporte.movimientos.ver', 'Reporte de movimientos'],
   ['reporte', 'reporte.valorizacion.ver', 'Reporte de valorización', true],
   ['reporte', 'reporte.exportar', 'Exportar reportes a Excel/PDF'],
+  ['reporte', 'reporte.ventas.ver', 'Registro de ventas y ventas por caja'],
+  ['reporte', 'reporte.cxc.ver', 'Reportes de cuentas por cobrar y cobranzas'],
 ];
 
 export const CATALOGO_PERMISOS = definiciones.map(([modulo, codigo, descripcion, sensible = false], orden) => ({
@@ -109,6 +131,11 @@ export const ROLES_PLANTILLA = [
       'transferencia.solicitar',
       'compras.compra.crear',
       'ventas.venta.crear',
+      'clientes.cliente.crear',
+      'clientes.cliente.editar',
+      'pos.venta.crear',
+      'pos.venta.credito',
+      'cxc.cobranza.crear',
     ],
   },
   {
@@ -140,9 +167,37 @@ export const ROLES_PLANTILLA = [
       'reporte.exportar',
       'compras.compra.ver',
       'ventas.venta.ver',
+      'pos.venta.ver',
+      'reporte.ventas.ver',
+      'cxc.cuenta.ver',
+      'reporte.cxc.ver',
+    ],
+  },
+  {
+    nombre: 'Cajero',
+    descripcion: 'Punto de venta: abre su turno, vende y registra clientes',
+    permisos: [
+      'pos.venta.crear',
+      'pos.venta.ver',
+      'pos.venta.credito',
+      'cxc.cuenta.ver',
+      'cxc.cobranza.crear',
+      'clientes.cliente.ver',
+      'clientes.cliente.crear',
+      'clientes.cliente.editar',
+      'productos.producto.ver',
+      'kardex.stock.ver',
     ],
   },
 ];
+
+/**
+ * Permisos que puede recibir un usuario OPERADOR (empleado de la empresa cliente):
+ * los de solo lectura más los del punto de venta, clientes y cobranzas, siempre dentro de su empresa.
+ */
+export const PERMISOS_OPERADOR = new Set(
+  CATALOGO_PERMISOS.filter((p) => p.lectura || ['pos', 'clientes', 'cxc'].includes(p.modulo)).map((p) => p.codigo),
+);
 
 /** Permiso que identifica a un "administrador" (para la regla del último administrador). */
 export const PERMISO_ADMIN = 'usuarios.roles.gestionar';

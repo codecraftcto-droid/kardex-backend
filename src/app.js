@@ -23,6 +23,10 @@ import transferenciasRoutes from './modules/transferencias/transferencias.routes
 import reportesRoutes from './modules/reportes/reportes.routes.js';
 import { crearRouterDocumentos } from './modules/comercial/documentos.routes.js';
 import { crearRouterPlataforma } from './plataforma/index.js';
+import clientesRoutes from './modules/pos/clientes.routes.js';
+import posRoutes from './modules/pos/pos.routes.js';
+import cxcRoutes from './modules/cxc/cxc.routes.js';
+import panelRoutes from './modules/panel/panel.routes.js';
 
 // Los identificadores BigInt (kardex, auditoría) se serializan como texto en JSON
 BigInt.prototype.toJSON = function toJSON() {
@@ -66,6 +70,10 @@ export function crearApp() {
   api.use('/reportes', reportesRoutes);
   api.use('/compras', crearRouterDocumentos('COMPRA'));
   api.use('/ventas', crearRouterDocumentos('VENTA'));
+  api.use('/clientes', clientesRoutes);
+  api.use('/pos', posRoutes);
+  api.use('/cxc', cxcRoutes);
+  api.use('/panel', panelRoutes);
   app.use('/api', api);
 
   app.use(noEncontradoRuta);
