@@ -16,6 +16,9 @@ const porSede = alcance.sede();
 const esquema = z.object({
   nombre: z.string().trim().min(2).max(120),
   direccion: textoOpcional(255),
+  /** Ubigeo INEI (6 dígitos) y código de establecimiento anexo en SUNAT (para las guías de remisión) */
+  ubigeo: z.string().trim().regex(/^\d{6}$/, 'El ubigeo tiene 6 dígitos').nullish().or(z.literal('')).transform((v) => v || null),
+  codigoEstablecimiento: z.string().trim().regex(/^\d{4}$/, 'El código de establecimiento tiene 4 dígitos (0000 = domicilio fiscal)').nullish().or(z.literal('')).transform((v) => v || null),
   responsableId: z.uuid().nullish().transform((v) => v || null),
 });
 

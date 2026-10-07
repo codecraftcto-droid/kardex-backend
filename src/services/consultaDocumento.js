@@ -46,6 +46,8 @@ export function normalizar(tipo, numero, d) {
     direccion: direccion && ubicacion && !direccion.includes(ubicacion) ? `${direccion}, ${ubicacion}` : direccion,
     estado: primero(d, 'estado'),
     condicion: primero(d, 'condicion'),
+    // Agente de retención del IGV (el nombre del campo varía según el proveedor)
+    agenteRetencion: Boolean(d?.es_agente_retencion ?? d?.esAgenteRetencion ?? d?.agente_retencion ?? false),
   };
 }
 

@@ -87,6 +87,103 @@ enum EstadoComprobante {
 enum EstadoSunat {
   NO_APLICA
   PENDIENTE
+  /// Enviado al proveedor; SUNAT aún no responde (p. ej. boletas que van en resumen diario)
+  ENVIADO
+  ACEPTADO
+  /// Aceptado con observaciones (válido)
+  OBSERVADO
+  RECHAZADO
+  /// Comunicación de baja aceptada por SUNAT
+  ANULADO
+}
+
+enum ModalidadTraslado {
+  /// Transporte público: lo hace un transportista (empresa con RUC)
+  PUBLICO
+  /// Transporte privado: vehículo y conductor propios
+  PRIVADO
+}
+
+/// Conexión con el SIRE: simulada (pruebas) o la API real de SUNAT
+enum ModoSire {
+  SIMULADO
+  SUNAT
+}
+
+/// De qué operación sale un asiento (MANUAL llega en la fase 3C)
+enum OrigenAsiento {
+  VENTA
+  COBRO
+  NOTA_CREDITO
+  REEMBOLSO
+  COBRANZA
+  COMPRA
+  VENTA_COMERCIAL
+  COSTO_VENTA
+  MANUAL
+  /// Asiento de cierre del ejercicio: salda las cuentas de resultados contra la 89
+  CIERRE
+}
+
+/// Naturaleza de una cuenta contable: dónde aumenta su saldo
+enum NaturalezaCuenta {
+  DEUDORA
+  ACREEDORA
+}
+
+/// Registros del SIRE: ventas e ingresos (RVIE) y compras (RCE)
+enum RegistroSire {
+  RVIE
+  RCE
+}
+
+/// Operación asíncrona con SUNAT (por ticket)
+enum TipoOperacionSire {
+  PROPUESTA
+  ACEPTACION
+}
+
+enum EstadoOperacionSire {
+  PROCESANDO
+  TERMINADO
+  ERROR
+}
+
+/// Diferencia entre la propuesta de SUNAT y lo registrado en el sistema
+enum TipoDiferenciaSire {
+  SOLO_SUNAT
+  SOLO_SISTEMA
+  MONTO
+  ESTADO
+}
+
+enum ResolucionDiferencia {
+  PENDIENTE
+  ACEPTADA
+  JUSTIFICADA
+  /// RCE: compra registrada en el sistema que se agrega a la propuesta
+  INCLUIDA
+  /// RCE: comprobante de la propuesta que se retira del registro (no es gasto del negocio, no se recibió…)
+  EXCLUIDA
+}
+
+/// Avance de un registro (RVIE o RCE) de un período
+enum EstadoRegistroSire {
+  PENDIENTE
+  PROPUESTA
+  CON_DIFERENCIAS
+  CONCILIADO
+  GENERADO
+}
+
+enum ProveedorCpe {
+  SIMULADO
+  NUBEFACT
+}
+
+enum AmbienteCpe {
+  PRUEBAS
+  PRODUCCION
 }
 
 enum FormaPago {
@@ -149,17 +246,19 @@ enum EstadoTransferencia {
 // ───────────────────────── Estudio (tenant) ─────────────────────────
 
 model Tenant {
-  id               String    @id @default(uuid()) @db.Uuid
-  nombre           String
-  ruc              String?
-  activo           Boolean   @default(true)
-  creadoEn         DateTime  @default(now()) @map("creado_en")
+  id                 String    @id @default(uuid()) @db.Uuid
+  nombre             String
+  ruc                String?
+  activo             Boolean   @default(true)
+  creadoEn           DateTime  @default(now()) @map("creado_en")
   // ── Datos administrados desde la plataforma (Módulo C) ──
-  planId           String?   @map("plan_id") @db.Uuid
-  emailContacto    String?   @map("email_contacto")
-  telefonoContacto String?   @map("telefono_contacto")
-  suspendidoEn     DateTime? @map("suspendido_en")
-  motivoSuspension String?   @map("motivo_suspension")
+  planId             String?   @map("plan_id") @db.Uuid
+  emailContacto      String?   @map("email_contacto")
+  telefonoContacto   String?   @map("telefono_contacto")
+  suspendidoEn       DateTime? @map("suspendido_en")
+  motivoSuspension   String?   @map("motivo_suspension")
+  /// Módulos contratados aparte del plan (se suman a los del plan)
+  modulosAdicionales String[]  @default([]) @map("modulos_adicionales")
 
   plan     Plan?               @relation(fields: [planId], references: [id])
   facturas FacturaPlataforma[]
@@ -360,33 +459,49 @@ model Auditoria {
 // ───────────────────────── Organización ─────────────────────────
 
 model Empresa {
-  id                 String             @id @default(uuid()) @db.Uuid
-  tenantId           String             @map("tenant_id") @db.Uuid
-  razonSocial        String             @map("razon_social")
-  ruc                String
-  contacto           String?
-  email              String?
-  telefono           String?
-  direccion          String?
-  metodoValorizacion MetodoValorizacion @default(PROMEDIO) @map("metodo_valorizacion")
-  nombreComercial    String?            @map("nombre_comercial")
-  activo             Boolean            @default(true)
-  creadoEn           DateTime           @default(now()) @map("creado_en")
-  actualizadoEn      DateTime           @updatedAt @map("actualizado_en")
+  id                  String             @id @default(uuid()) @db.Uuid
+  tenantId            String             @map("tenant_id") @db.Uuid
+  razonSocial         String             @map("razon_social")
+  ruc                 String
+  contacto            String?
+  email               String?
+  telefono            String?
+  direccion           String?
+  metodoValorizacion  MetodoValorizacion @default(PROMEDIO) @map("metodo_valorizacion")
+  nombreComercial     String?            @map("nombre_comercial")
+  /// Cuenta de detracciones en el Banco de la Nación (se imprime en facturas sujetas al SPOT)
+  cuentaDetracciones  String?            @map("cuenta_detracciones")
+  /// Buen contribuyente o agente de retención: sus ventas no sufren retención del IGV
+  exceptuadoRetencion Boolean            @default(false) @map("exceptuado_retencion")
+  /// Buen contribuyente (o UESP): SUNAT le da vencimientos propios en el cronograma mensual
+  buenContribuyente   Boolean            @default(false) @map("buen_contribuyente")
+  activo              Boolean            @default(true)
+  creadoEn            DateTime           @default(now()) @map("creado_en")
+  actualizadoEn       DateTime           @updatedAt @map("actualizado_en")
 
-  tenant         Tenant               @relation(fields: [tenantId], references: [id])
-  sedes          Sede[]
-  almacenes      Almacen[]
-  usuarios       Usuario[]
-  categorias     Categoria[]
-  productos      Producto[]
-  movimientos    Movimiento[]
-  transferencias Transferencia[]
-  documentos     DocumentoComercial[]
-  clientes       Cliente[]
-  cajas          Caja[]
-  comprobantes   Comprobante[]
-  cobranzas      Cobranza[]
+  tenant           Tenant               @relation(fields: [tenantId], references: [id])
+  sedes            Sede[]
+  almacenes        Almacen[]
+  usuarios         Usuario[]
+  categorias       Categoria[]
+  productos        Producto[]
+  movimientos      Movimiento[]
+  transferencias   Transferencia[]
+  documentos       DocumentoComercial[]
+  clientes         Cliente[]
+  cajas            Caja[]
+  facturacion      ConfigFacturacion?
+  comprobantes     Comprobante[]
+  cobranzas        Cobranza[]
+  guias            GuiaRemision[]
+  sire             ConfigSire?
+  periodosSire     PeriodoSire[]
+  operacionesSire  OperacionSire[]
+  propuestasSire   PropuestaSire[]
+  cuentaContables  CuentaContable[]
+  configContable   ConfigContable?
+  asientos         Asiento[]
+  periodoContables PeriodoContable[]
 
   @@unique([tenantId, ruc])
   @@index([tenantId])
@@ -394,15 +509,18 @@ model Empresa {
 }
 
 model Sede {
-  id            String   @id @default(uuid()) @db.Uuid
-  tenantId      String   @map("tenant_id") @db.Uuid
-  empresaId     String   @map("empresa_id") @db.Uuid
-  nombre        String
-  direccion     String?
-  responsableId String?  @map("responsable_id") @db.Uuid
-  activo        Boolean  @default(true)
-  creadoEn      DateTime @default(now()) @map("creado_en")
-  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+  id                    String   @id @default(uuid()) @db.Uuid
+  tenantId              String   @map("tenant_id") @db.Uuid
+  empresaId             String   @map("empresa_id") @db.Uuid
+  nombre                String
+  direccion             String?
+  /// Ubigeo INEI (6 dígitos) y código de establecimiento anexo en SUNAT: puntos de partida/llegada de las guías
+  ubigeo                String?
+  codigoEstablecimiento String?  @map("codigo_establecimiento")
+  responsableId         String?  @map("responsable_id") @db.Uuid
+  activo                Boolean  @default(true)
+  creadoEn              DateTime @default(now()) @map("creado_en")
+  actualizadoEn         DateTime @updatedAt @map("actualizado_en")
 
   empresa     Empresa   @relation(fields: [empresaId], references: [id])
   responsable Usuario?  @relation(fields: [responsableId], references: [id], onDelete: SetNull)
@@ -485,6 +603,8 @@ model Producto {
   precioReferencial Decimal? @map("precio_referencial") @db.Decimal(14, 4)
   /// Catálogo 07 SUNAT: 10 gravado, 20 exonerado, 30 inafecto
   afectacionIgv     String   @default("10") @map("afectacion_igv")
+  /// Bien o servicio sujeto a detracción (catálogo 54 de SUNAT)
+  detraccionCodigo  String?  @map("detraccion_codigo")
   activo            Boolean  @default(true)
   creadoEn          DateTime @default(now()) @map("creado_en")
   actualizadoEn     DateTime @updatedAt @map("actualizado_en")
@@ -691,36 +811,46 @@ model TransferenciaDetalle {
  * → ANULADO (registra la anulación inversa del movimiento). Confirmado ya no se edita.
  */
 model DocumentoComercial {
-  id                    String                 @id @default(uuid()) @db.Uuid
-  tenantId              String                 @map("tenant_id") @db.Uuid
-  empresaId             String                 @map("empresa_id") @db.Uuid
-  sedeId                String                 @map("sede_id") @db.Uuid
-  almacenId             String                 @map("almacen_id") @db.Uuid
-  tipo                  TipoDocumentoComercial
-  estado                EstadoDocumento        @default(BORRADOR)
+  id                     String                 @id @default(uuid()) @db.Uuid
+  tenantId               String                 @map("tenant_id") @db.Uuid
+  empresaId              String                 @map("empresa_id") @db.Uuid
+  sedeId                 String                 @map("sede_id") @db.Uuid
+  almacenId              String                 @map("almacen_id") @db.Uuid
+  tipo                   TipoDocumentoComercial
+  estado                 EstadoDocumento        @default(BORRADOR)
   /// Proveedor (compra) o cliente (venta)
-  terceroDocumento      String                 @map("tercero_documento")
-  terceroNombre         String                 @map("tercero_nombre")
-  comprobanteTipo       String                 @map("comprobante_tipo")
-  serie                 String
-  numero                String
-  fechaEmision          DateTime               @map("fecha_emision") @db.Date
-  moneda                Moneda                 @default(PEN)
-  tipoCambio            Decimal                @default(1) @map("tipo_cambio") @db.Decimal(10, 4)
-  observacion           String?
-  subtotal              Decimal                @default(0) @db.Decimal(14, 2)
-  igv                   Decimal                @default(0) @db.Decimal(14, 2)
-  total                 Decimal                @default(0) @db.Decimal(14, 2)
-  creadoPorId           String                 @map("creado_por_id") @db.Uuid
-  confirmadoPorId       String?                @map("confirmado_por_id") @db.Uuid
-  confirmadoEn          DateTime?              @map("confirmado_en")
-  anuladoPorId          String?                @map("anulado_por_id") @db.Uuid
-  anuladoEn             DateTime?              @map("anulado_en")
-  motivoAnulacion       String?                @map("motivo_anulacion")
-  movimientoId          String?                @unique @map("movimiento_id") @db.Uuid
-  movimientoAnulacionId String?                @map("movimiento_anulacion_id") @db.Uuid
-  creadoEn              DateTime               @default(now()) @map("creado_en")
-  actualizadoEn         DateTime               @updatedAt @map("actualizado_en")
+  terceroDocumento       String                 @map("tercero_documento")
+  terceroNombre          String                 @map("tercero_nombre")
+  comprobanteTipo        String                 @map("comprobante_tipo")
+  serie                  String
+  numero                 String
+  fechaEmision           DateTime               @map("fecha_emision") @db.Date
+  moneda                 Moneda                 @default(PEN)
+  tipoCambio             Decimal                @default(1) @map("tipo_cambio") @db.Decimal(10, 4)
+  observacion            String?
+  subtotal               Decimal                @default(0) @db.Decimal(14, 2)
+  igv                    Decimal                @default(0) @db.Decimal(14, 2)
+  total                  Decimal                @default(0) @db.Decimal(14, 2)
+  creadoPorId            String                 @map("creado_por_id") @db.Uuid
+  confirmadoPorId        String?                @map("confirmado_por_id") @db.Uuid
+  confirmadoEn           DateTime?              @map("confirmado_en")
+  anuladoPorId           String?                @map("anulado_por_id") @db.Uuid
+  anuladoEn              DateTime?              @map("anulado_en")
+  motivoAnulacion        String?                @map("motivo_anulacion")
+  movimientoId           String?                @unique @map("movimiento_id") @db.Uuid
+  /// Validación del comprobante del proveedor en SUNAT (consulta integrada de validez)
+  validacionEstado       String?                @map("validacion_estado")
+  validacionMensaje      String?                @map("validacion_mensaje")
+  validacionRucEstado    String?                @map("validacion_ruc_estado")
+  validacionRucCondicion String?                @map("validacion_ruc_condicion")
+  validadoEn             DateTime?              @map("validado_en")
+  /// Compras sujetas al SPOT: el IGV da crédito fiscal recién cuando se deposita la detracción
+  detraccionMonto        Decimal                @default(0) @map("detraccion_monto") @db.Decimal(14, 2)
+  detraccionConstancia   String?                @map("detraccion_constancia")
+  detraccionFecha        DateTime?              @map("detraccion_fecha") @db.Date
+  movimientoAnulacionId  String?                @map("movimiento_anulacion_id") @db.Uuid
+  creadoEn               DateTime               @default(now()) @map("creado_en")
+  actualizadoEn          DateTime               @updatedAt @map("actualizado_en")
 
   empresa    Empresa                     @relation(fields: [empresaId], references: [id])
   almacen    Almacen                     @relation(fields: [almacenId], references: [id])
@@ -842,6 +972,8 @@ model Plan {
   maxEmpresas   Int?     @map("max_empresas")
   maxUsuarios   Int?     @map("max_usuarios")
   maxAlmacenes  Int?     @map("max_almacenes")
+  /// Módulos que incluye el plan (inventario, pos, cxc, facturacion…)
+  modulos       String[] @default(["inventario", "pos", "cxc", "facturacion", "sire", "contabilidad"])
   activo        Boolean  @default(true)
   creadoEn      DateTime @default(now()) @map("creado_en")
 
@@ -939,6 +1071,8 @@ model Cliente {
   telefono          String?
   /// Persona natural con negocio: su RUC 10 para emitirle factura sin registrarla dos veces
   rucAsociado       String?          @map("ruc_asociado")
+  /// El cliente es agente de retención del IGV (retiene 3% en facturas mayores a S/ 700)
+  agenteRetencion   Boolean          @default(false) @map("agente_retencion")
   /// Venta al crédito: habilitado, tope de deuda (null = sin tope) y plazo por defecto
   creditoHabilitado Boolean          @default(false) @map("credito_habilitado")
   limiteCredito     Decimal?         @map("limite_credito") @db.Decimal(14, 2)
@@ -1039,6 +1173,12 @@ model Comprobante {
   descuentoTotal         Decimal           @default(0) @map("descuento_total") @db.Decimal(14, 2)
   /// Parte de descuentoTotal que vino de un descuento sobre toda la venta (prorrateado en las líneas)
   descuentoGlobal        Decimal           @default(0) @map("descuento_global") @db.Decimal(14, 2)
+  /// SPOT: detracción que el cliente deposita en la cuenta del Banco de la Nación
+  detraccionCodigo       String?           @map("detraccion_codigo")
+  detraccionPorcentaje   Decimal?          @map("detraccion_porcentaje") @db.Decimal(5, 2)
+  detraccionMonto        Decimal           @default(0) @map("detraccion_monto") @db.Decimal(14, 2)
+  /// Retención del IGV (3%) que aplica el cliente agente de retención
+  retencionMonto         Decimal           @default(0) @map("retencion_monto") @db.Decimal(14, 2)
   total                  Decimal           @db.Decimal(14, 2)
   formaPago              FormaPago         @default(CONTADO) @map("forma_pago")
   /// Crédito: monto financiado (total − pago inicial) y lo que aún se debe
@@ -1053,6 +1193,21 @@ model Comprobante {
   vuelto                 Decimal           @default(0) @db.Decimal(14, 2)
   estado                 EstadoComprobante @default(EMITIDO)
   estadoSunat            EstadoSunat       @map("estado_sunat")
+  /// Respuesta de SUNAT (vía el proveedor) y representación oficial
+  sunatCodigo            String?           @map("sunat_codigo")
+  sunatDescripcion       String?           @map("sunat_descripcion")
+  sunatHash              String?           @map("sunat_hash")
+  sunatQr                String?           @map("sunat_qr")
+  sunatPdf               String?           @map("sunat_pdf")
+  sunatXml               String?           @map("sunat_xml")
+  sunatCdr               String?           @map("sunat_cdr")
+  sunatIntentos          Int               @default(0) @map("sunat_intentos")
+  sunatUltimoError       String?           @map("sunat_ultimo_error")
+  sunatEnviadoEn         DateTime?         @map("sunat_enviado_en")
+  /// Comunicación de baja (anulación ante SUNAT de un comprobante ya aceptado)
+  bajaEstado             String?           @map("baja_estado")
+  bajaTicket             String?           @map("baja_ticket")
+  bajaMensaje            String?           @map("baja_mensaje")
   /// Nota de crédito: comprobante que modifica y motivo (catálogo 09)
   referenciaId           String?           @map("referencia_id") @db.Uuid
   motivoCodigo           String?           @map("motivo_codigo")
@@ -1178,4 +1333,421 @@ model Cobranza {
   @@index([comprobanteId])
   @@index([sesionCajaId])
   @@map("cobranzas")
+}
+
+/// Conexión de la empresa con su proveedor de facturación electrónica (OSE/PSE)
+model ConfigFacturacion {
+  id                       String       @id @default(uuid()) @db.Uuid
+  tenantId                 String       @map("tenant_id") @db.Uuid
+  empresaId                String       @unique @map("empresa_id") @db.Uuid
+  proveedor                ProveedorCpe @default(SIMULADO)
+  ambiente                 AmbienteCpe  @default(PRUEBAS)
+  /// Ruta del API que entrega el proveedor (Nubefact: una por cuenta)
+  url                      String?
+  /// Token del proveedor, cifrado (AES-256-GCM); nunca se devuelve al navegador
+  tokenCifrado             String?      @map("token_cifrado")
+  envioAutomatico          Boolean      @default(true) @map("envio_automatico")
+  /// Serie de las guías de remisión electrónicas (remitente)
+  serieGuia                String       @default("T001") @map("serie_guia")
+  /// Credenciales API de SUNAT (Consulta de validez de comprobantes), generadas en SOL
+  sunatClientId            String?      @map("sunat_client_id")
+  sunatClientSecretCifrado String?      @map("sunat_client_secret_cifrado")
+  activo                   Boolean      @default(true)
+  creadoEn                 DateTime     @default(now()) @map("creado_en")
+  actualizadoEn            DateTime     @updatedAt @map("actualizado_en")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@index([tenantId])
+  @@map("config_facturacion")
+}
+
+/// Guía de remisión electrónica remitente (tipo 09): sustenta el traslado de bienes
+model GuiaRemision {
+  id                     String            @id @default(uuid()) @db.Uuid
+  tenantId               String            @map("tenant_id") @db.Uuid
+  empresaId              String            @map("empresa_id") @db.Uuid
+  sedeId                 String            @map("sede_id") @db.Uuid
+  /// Almacén de partida (define el alcance: quién la ve y la emite)
+  almacenId              String            @map("almacen_id") @db.Uuid
+  serie                  String
+  numero                 Int
+  fechaEmision           DateTime          @default(now()) @map("fecha_emision")
+  fechaTraslado          DateTime          @map("fecha_traslado") @db.Date
+  /// Catálogo 20 de SUNAT (01 venta, 02 compra, 04 entre establecimientos, 13 otros…)
+  motivo                 String
+  motivoDescripcion      String?           @map("motivo_descripcion")
+  modalidad              ModalidadTraslado
+  destinatarioTipoDoc    TipoDocIdentidad  @map("destinatario_tipo_doc")
+  destinatarioNumDoc     String            @map("destinatario_num_doc")
+  destinatarioNombre     String            @map("destinatario_nombre")
+  partidaUbigeo          String            @map("partida_ubigeo")
+  partidaDireccion       String            @map("partida_direccion")
+  partidaEstablecimiento String?           @map("partida_establecimiento")
+  llegadaUbigeo          String            @map("llegada_ubigeo")
+  llegadaDireccion       String            @map("llegada_direccion")
+  llegadaEstablecimiento String?           @map("llegada_establecimiento")
+  pesoBruto              Decimal           @map("peso_bruto") @db.Decimal(12, 3)
+  unidadPeso             String            @default("KGM") @map("unidad_peso")
+  bultos                 Int?
+  transportistaRuc       String?           @map("transportista_ruc")
+  transportistaNombre    String?           @map("transportista_nombre")
+  transportistaMtc       String?           @map("transportista_mtc")
+  conductorTipoDoc       TipoDocIdentidad? @map("conductor_tipo_doc")
+  conductorNumDoc        String?           @map("conductor_num_doc")
+  conductorNombres       String?           @map("conductor_nombres")
+  conductorApellidos     String?           @map("conductor_apellidos")
+  conductorLicencia      String?           @map("conductor_licencia")
+  vehiculoPlaca          String?           @map("vehiculo_placa")
+  /// Comprobante relacionado (venta): catálogo 01 + serie-número
+  docRelTipo             String?           @map("doc_rel_tipo")
+  docRelSerie            String?           @map("doc_rel_serie")
+  docRelNumero           String?           @map("doc_rel_numero")
+  transferenciaId        String?           @map("transferencia_id") @db.Uuid
+  comprobanteId          String?           @map("comprobante_id") @db.Uuid
+  observacion            String?
+  /// EMITIDA | ANULADA (solo se anula si aún no se envió a SUNAT)
+  estado                 String            @default("EMITIDA")
+  estadoSunat            EstadoSunat       @default(PENDIENTE) @map("estado_sunat")
+  sunatCodigo            String?           @map("sunat_codigo")
+  sunatDescripcion       String?           @map("sunat_descripcion")
+  sunatHash              String?           @map("sunat_hash")
+  sunatQr                String?           @map("sunat_qr")
+  sunatPdf               String?           @map("sunat_pdf")
+  sunatXml               String?           @map("sunat_xml")
+  sunatCdr               String?           @map("sunat_cdr")
+  sunatIntentos          Int               @default(0) @map("sunat_intentos")
+  sunatUltimoError       String?           @map("sunat_ultimo_error")
+  sunatEnviadoEn         DateTime?         @map("sunat_enviado_en")
+  usuarioId              String            @map("usuario_id") @db.Uuid
+  creadoEn               DateTime          @default(now()) @map("creado_en")
+
+  empresa  Empresa               @relation(fields: [empresaId], references: [id])
+  detalles GuiaRemisionDetalle[]
+
+  @@unique([empresaId, serie, numero])
+  @@index([tenantId])
+  @@index([empresaId, fechaEmision])
+  @@index([transferenciaId])
+  @@index([comprobanteId])
+  @@map("guias_remision")
+}
+
+model GuiaRemisionDetalle {
+  id           String  @id @default(uuid()) @db.Uuid
+  tenantId     String  @map("tenant_id") @db.Uuid
+  guiaId       String  @map("guia_id") @db.Uuid
+  productoId   String? @map("producto_id") @db.Uuid
+  codigo       String?
+  descripcion  String
+  unidadCodigo String  @map("unidad_codigo")
+  cantidad     Decimal @db.Decimal(18, 4)
+
+  guia GuiaRemision @relation(fields: [guiaId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([guiaId])
+  @@map("guia_remision_detalles")
+}
+
+/// Credenciales del SIRE de UNA empresa. Los secretos van cifrados y nunca salen del servidor.
+model ConfigSire {
+  id                  String    @id @default(uuid()) @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  empresaId           String    @unique @map("empresa_id") @db.Uuid
+  modo                ModoSire  @default(SIMULADO)
+  /// Credenciales API SUNAT (SOL → Credenciales de API SUNAT, con acceso al SIRE)
+  clientId            String?   @map("client_id")
+  clientSecretCifrado String?   @map("client_secret_cifrado")
+  /// Usuario secundario SOL con perfil SIRE (sin el RUC) y su clave
+  usuarioSol          String?   @map("usuario_sol")
+  claveSolCifrada     String?   @map("clave_sol_cifrada")
+  activo              Boolean   @default(true)
+  ultimaConexion      DateTime? @map("ultima_conexion")
+  ultimoError         String?   @map("ultimo_error")
+  creadoEn            DateTime  @default(now()) @map("creado_en")
+  actualizadoEn       DateTime  @updatedAt @map("actualizado_en")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@index([tenantId])
+  @@map("config_sire")
+}
+
+/// Período tributario (AAAAMM) de una empresa y el avance de sus registros SIRE.
+/// Solo existe cuando hubo actividad; sin fila, ambos registros están PENDIENTES.
+model PeriodoSire {
+  id             String             @id @default(uuid()) @db.Uuid
+  tenantId       String             @map("tenant_id") @db.Uuid
+  empresaId      String             @map("empresa_id") @db.Uuid
+  periodo        String             @db.Char(6)
+  estadoRvie     EstadoRegistroSire @default(PENDIENTE) @map("estado_rvie")
+  estadoRce      EstadoRegistroSire @default(PENDIENTE) @map("estado_rce")
+  /// Estado tal como lo informa SUNAT en la última sincronización
+  sunatRvie      String?            @map("sunat_rvie")
+  sunatRce       String?            @map("sunat_rce")
+  sincronizadoEn DateTime?          @map("sincronizado_en")
+  creadoEn       DateTime           @default(now()) @map("creado_en")
+  actualizadoEn  DateTime           @updatedAt @map("actualizado_en")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@unique([empresaId, periodo])
+  @@index([tenantId])
+  @@map("periodos_sire")
+}
+
+/// Cronograma oficial de vencimientos mensuales de SUNAT (global, lo carga la plataforma).
+/// grupo: último dígito del RUC ("0"…"9") o "BC" (buenos contribuyentes y UESP).
+model CronogramaSunat {
+  id            String   @id @default(uuid()) @db.Uuid
+  periodo       String   @db.Char(6)
+  grupo         String   @db.VarChar(2)
+  vencimiento   DateTime @db.Date
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  @@unique([periodo, grupo])
+  @@map("cronograma_sunat")
+}
+
+/// Operación con el SIRE que SUNAT atiende por ticket: descargar una propuesta o aceptarla.
+model OperacionSire {
+  id          String              @id @default(uuid()) @db.Uuid
+  tenantId    String              @map("tenant_id") @db.Uuid
+  empresaId   String              @map("empresa_id") @db.Uuid
+  periodo     String              @db.Char(6)
+  registro    RegistroSire
+  tipo        TipoOperacionSire
+  estado      EstadoOperacionSire @default(PROCESANDO)
+  ticket      String?
+  codProceso  String?             @map("cod_proceso")
+  intentos    Int                 @default(0)
+  mensaje     String?
+  /// Constancia o número de operación que devuelve SUNAT al aceptar
+  constancia  String?
+  usuarioId   String              @map("usuario_id") @db.Uuid
+  creadoEn    DateTime            @default(now()) @map("creado_en")
+  terminadoEn DateTime?           @map("terminado_en")
+
+  empresa   Empresa        @relation(fields: [empresaId], references: [id])
+  propuesta PropuestaSire?
+
+  @@index([tenantId])
+  @@index([empresaId, periodo, registro])
+  @@map("operaciones_sire")
+}
+
+/// Propuesta descargada de SUNAT. Solo la última de cada período y registro es la vigente.
+model PropuestaSire {
+  id           String       @id @default(uuid()) @db.Uuid
+  tenantId     String       @map("tenant_id") @db.Uuid
+  empresaId    String       @map("empresa_id") @db.Uuid
+  periodo      String       @db.Char(6)
+  registro     RegistroSire
+  operacionId  String?      @unique @map("operacion_id") @db.Uuid
+  vigente      Boolean      @default(true)
+  cantidad     Int          @default(0)
+  totalBase    Decimal      @default(0) @map("total_base") @db.Decimal(16, 2)
+  totalIgv     Decimal      @default(0) @map("total_igv") @db.Decimal(16, 2)
+  total        Decimal      @default(0) @db.Decimal(16, 2)
+  descargadaEn DateTime     @default(now()) @map("descargada_en")
+
+  empresa     Empresa                @relation(fields: [empresaId], references: [id])
+  operacion   OperacionSire?         @relation(fields: [operacionId], references: [id])
+  detalles    PropuestaSireDetalle[]
+  diferencias DiferenciaSire[]
+
+  @@index([tenantId])
+  @@index([empresaId, periodo, registro, vigente])
+  @@map("propuestas_sire")
+}
+
+/// Comprobante de la propuesta de SUNAT (montos en la moneda del comprobante; NC en positivo)
+model PropuestaSireDetalle {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  propuestaId  String   @map("propuesta_id") @db.Uuid
+  /// Tipo de comprobante (catálogo 10 de SUNAT: 01 factura, 03 boleta, 07 NC, 08 ND)
+  tipoCp       String   @map("tipo_cp") @db.VarChar(2)
+  serie        String
+  numero       String
+  fechaEmision DateTime @map("fecha_emision") @db.Date
+  /// Tipo de documento de identidad (catálogo 06) y número
+  docTipo      String?  @map("doc_tipo") @db.VarChar(2)
+  docNumero    String?  @map("doc_numero")
+  nombre       String?
+  baseGravada  Decimal  @default(0) @map("base_gravada") @db.Decimal(14, 2)
+  igv          Decimal  @default(0) @db.Decimal(14, 2)
+  exonerado    Decimal  @default(0) @db.Decimal(14, 2)
+  inafecto     Decimal  @default(0) @db.Decimal(14, 2)
+  otros        Decimal  @default(0) @db.Decimal(14, 2)
+  total        Decimal  @default(0) @db.Decimal(14, 2)
+  moneda       String   @default("PEN") @db.VarChar(3)
+  anulado      Boolean  @default(false)
+  refTipo      String?  @map("ref_tipo") @db.VarChar(2)
+  refSerie     String?  @map("ref_serie")
+  refNumero    String?  @map("ref_numero")
+
+  propuesta PropuestaSire @relation(fields: [propuestaId], references: [id])
+
+  @@index([tenantId])
+  @@index([propuestaId])
+  @@map("propuestas_sire_detalle")
+}
+
+/// Diferencia encontrada al conciliar una propuesta con el sistema, y cómo se resolvió.
+model DiferenciaSire {
+  id                 String               @id @default(uuid()) @db.Uuid
+  tenantId           String               @map("tenant_id") @db.Uuid
+  propuestaId        String               @map("propuesta_id") @db.Uuid
+  tipo               TipoDiferenciaSire
+  /// tipo-serie-número, para reconocerla al volver a descargar la propuesta
+  clave              String
+  tipoCp             String               @map("tipo_cp") @db.VarChar(2)
+  serie              String
+  numero             String
+  fechaEmision       DateTime?            @map("fecha_emision") @db.Date
+  /// RCE: RUC del proveedor (forma parte de la clave)
+  docNumero          String?              @map("doc_numero")
+  nombre             String?
+  totalSunat         Decimal?             @map("total_sunat") @db.Decimal(14, 2)
+  totalSistema       Decimal?             @map("total_sistema") @db.Decimal(14, 2)
+  igvSunat           Decimal?             @map("igv_sunat") @db.Decimal(14, 2)
+  igvSistema         Decimal?             @map("igv_sistema") @db.Decimal(14, 2)
+  /// Origen en el sistema: comprobante de caja o documento de venta
+  comprobanteId      String?              @map("comprobante_id") @db.Uuid
+  documentoId        String?              @map("documento_id") @db.Uuid
+  estadoSunatSistema String?              @map("estado_sunat_sistema")
+  resolucion         ResolucionDiferencia @default(PENDIENTE)
+  nota               String?
+  resueltoPorId      String?              @map("resuelto_por_id") @db.Uuid
+  resueltoEn         DateTime?            @map("resuelto_en")
+
+  propuesta PropuestaSire @relation(fields: [propuestaId], references: [id])
+
+  @@index([tenantId])
+  @@index([propuestaId, resolucion])
+  @@map("diferencias_sire")
+}
+
+/// Cuenta del plan contable de una empresa (PCGE). El código anida por prefijo (12 → 121 → 1212):
+/// la jerarquía y si es imputable se calculan a partir de los códigos.
+model CuentaContable {
+  id            String           @id @default(uuid()) @db.Uuid
+  tenantId      String           @map("tenant_id") @db.Uuid
+  empresaId     String           @map("empresa_id") @db.Uuid
+  codigo        String           @db.VarChar(10)
+  nombre        String
+  naturaleza    NaturalezaCuenta
+  /// Se analiza por cliente o proveedor (cuentas por cobrar y por pagar)
+  pideTercero   Boolean          @default(false) @map("pide_tercero")
+  /// Cuentas de gasto (elemento 6): amarre al elemento 9 (debe) y a la 79 (haber)
+  destinoDebe   String?          @map("destino_debe") @db.VarChar(10)
+  destinoHaber  String?          @map("destino_haber") @db.VarChar(10)
+  activo        Boolean          @default(true)
+  creadoEn      DateTime         @default(now()) @map("creado_en")
+  actualizadoEn DateTime         @updatedAt @map("actualizado_en")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@unique([empresaId, codigo])
+  @@index([tenantId])
+  @@map("cuentas_contables")
+}
+
+/// Configuración contable de una empresa: qué cuenta usa cada operación en los asientos automáticos
+model ConfigContable {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  empresaId     String   @unique @map("empresa_id") @db.Uuid
+  /// { clave de operación: código de cuenta } (ver CUENTAS_OPERACION)
+  cuentas       Json     @default("{}")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@index([tenantId])
+  @@map("config_contable")
+}
+
+/// Asiento contable. Los automáticos se generan una sola vez por operación (clave única);
+/// si la operación se anula, se registra un extorno en lugar de borrar el asiento.
+model Asiento {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  empresaId     String        @map("empresa_id") @db.Uuid
+  periodo       String        @db.Char(6)
+  /// Correlativo dentro del período
+  numero        Int
+  fecha         DateTime      @db.Date
+  glosa         String
+  origen        OrigenAsiento
+  /// Identifica la operación de origen: VENTA:<id>, COSTO:<id>… (con ":EXTORNO" para la reversión)
+  clave         String
+  comprobanteId String?       @map("comprobante_id") @db.Uuid
+  documentoId   String?       @map("documento_id") @db.Uuid
+  cobranzaId    String?       @map("cobranza_id") @db.Uuid
+  movimientoId  String?       @map("movimiento_id") @db.Uuid
+  extornoDeId   String?       @map("extorno_de_id") @db.Uuid
+  totalDebe     Decimal       @map("total_debe") @db.Decimal(16, 2)
+  totalHaber    Decimal       @map("total_haber") @db.Decimal(16, 2)
+  usuarioId     String?       @map("usuario_id") @db.Uuid
+  creadoEn      DateTime      @default(now()) @map("creado_en")
+
+  empresa   Empresa        @relation(fields: [empresaId], references: [id])
+  extornoDe Asiento?       @relation("Extorno", fields: [extornoDeId], references: [id])
+  extornos  Asiento[]      @relation("Extorno")
+  lineas    AsientoLinea[]
+
+  @@unique([empresaId, clave])
+  @@unique([empresaId, periodo, numero])
+  @@index([tenantId])
+  @@index([empresaId, periodo, fecha])
+  @@map("asientos")
+}
+
+/// Línea de un asiento: una cuenta al debe o al haber, con el tercero y el documento para el análisis
+model AsientoLinea {
+  id            String  @id @default(uuid()) @db.Uuid
+  tenantId      String  @map("tenant_id") @db.Uuid
+  asientoId     String  @map("asiento_id") @db.Uuid
+  orden         Int
+  cuenta        String  @db.VarChar(10)
+  debe          Decimal @default(0) @db.Decimal(16, 2)
+  haber         Decimal @default(0) @db.Decimal(16, 2)
+  glosa         String?
+  /// Tercero (catálogo 06) y documento (catálogo 10) de las cuentas por cobrar y por pagar
+  terceroTipo   String? @map("tercero_tipo") @db.VarChar(2)
+  terceroDoc    String? @map("tercero_doc")
+  terceroNombre String? @map("tercero_nombre")
+  docTipo       String? @map("doc_tipo") @db.VarChar(2)
+  docSerie      String? @map("doc_serie")
+  docNumero     String? @map("doc_numero")
+
+  asiento Asiento @relation(fields: [asientoId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([asientoId])
+  @@map("asiento_lineas")
+}
+
+/// Estado contable de un período de la empresa. Sin fila, el período está abierto.
+/// Cerrado: no se crean, editan ni borran asientos (lo impide también un trigger).
+model PeriodoContable {
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  empresaId        String    @map("empresa_id") @db.Uuid
+  periodo          String    @db.Char(6)
+  cerrado          Boolean   @default(false)
+  cerradoEn        DateTime? @map("cerrado_en")
+  cerradoPorId     String?   @map("cerrado_por_id") @db.Uuid
+  reabiertoEn      DateTime? @map("reabierto_en")
+  motivoReapertura String?   @map("motivo_reapertura")
+  actualizadoEn    DateTime  @updatedAt @map("actualizado_en")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@unique([empresaId, periodo])
+  @@index([tenantId])
+  @@map("periodos_contables")
 }

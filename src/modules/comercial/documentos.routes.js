@@ -8,7 +8,8 @@ import { auditar } from '../../services/auditoria.js';
 import { emitir } from '../../realtime/socket.js';
 import { paginacion, respuestaPaginada } from '../../lib/http.js';
 import { textoOpcional } from '../../lib/esquemas.js';
-import { noEncontrado } from '../../lib/errors.js';
+import { HttpError, noEncontrado } from '../../lib/errors.js';
+import { esValidable, validarComprobante } from '../../sunat/validez.js';
 import * as servicio from '../../comercial/documentos.js';
 
 /**
@@ -65,6 +66,7 @@ export function crearRouterDocumentos(tipo) {
     eliminar: d.estado === 'BORRADOR' && puede(perms, `${p}.crear`, recursoDe(d)),
     confirmar: d.estado === 'BORRADOR' && puede(perms, `${p}.aprobar`, recursoDe(d)),
     anular: d.estado === 'CONFIRMADO' && puede(perms, `${p}.anular`, recursoDe(d)),
+    detraccion: tipo === 'COMPRA' && d.estado !== 'ANULADO' && puede(perms, `${p}.crear`, recursoDe(d)),
   });
 
   function notificar(d, movimientos = []) {
@@ -197,14 +199,91 @@ export function crearRouterDocumentos(tipo) {
     res.status(204).end();
   });
 
-  router.post('/:id/confirmar', autorizar(`${p}.aprobar`), async (req, res) => {
+  /**
+   * Valida en SUNAT el comprobante del proveedor y guarda el resultado.
+   * Devuelve null si no aplica (no es factura/boleta con RUC) o si la empresa no lo tiene configurado.
+   */
+  async function validarEnSunat(req, d, { exigirConfig = false } = {}) {
+    if (tipo !== 'COMPRA' || !esValidable(d)) return null;
+    const [config, empresa] = await req.db((tx) =>
+      Promise.all([tx.configFacturacion.findUnique({ where: { empresaId: d.empresaId } }), tx.empresa.findUnique({ where: { id: d.empresaId }, select: { ruc: true } })]),
+    );
+    let r;
+    try {
+      r = await validarComprobante({ config, rucConsultante: empresa.ruc, documento: d });
+    } catch (e) {
+      if (exigirConfig) throw new HttpError(409, e.message);
+      r = { estado: 'ERROR', mensaje: e.message };
+    }
+    await req.db((tx) => tx.documentoComercial.update({
+      where: { id: d.id },
+      data: {
+        validacionEstado: r.estado, validacionMensaje: r.mensaje?.slice(0, 500) ?? null,
+        validacionRucEstado: r.rucEstado ?? null, validacionRucCondicion: r.rucCondicion ?? null, validadoEn: new Date(),
+      },
+    }));
+    return r;
+  }
+
+  if (tipo === 'COMPRA') {
+    router.post('/:id/validar-sunat', autorizar(`${p}.crear`), async (req, res) => {
+      const d = await cargar(req, `${p}.crear`);
+      if (!esValidable(d)) throw new HttpError(400, 'Solo se validan facturas y boletas de proveedores con RUC');
+      res.json(await validarEnSunat(req, d, { exigirConfig: true }));
+    });
+
+    /**
+     * Detracción (SPOT) de la compra: monto y, cuando se deposita, la constancia. El IGV de la
+     * compra da crédito fiscal recién en el período del depósito. No toca el kardex, por eso se
+     * puede registrar también con la compra ya confirmada.
+     */
+    router.put(
+      '/:id/detraccion',
+      autorizar(`${p}.crear`),
+      validar(z.object({
+        monto: decimal(2),
+        constancia: z.string().trim().max(30).nullish().transform((v) => v || null),
+        fecha: z.coerce.date().nullish(),
+      }).refine((v) => !v.constancia || v.fecha, { message: 'Indique la fecha del depósito', path: ['fecha'] })),
+      async (req, res) => {
+        const d = await cargar(req, `${p}.crear`);
+        if (d.estado === 'ANULADO') throw new HttpError(409, 'La compra está anulada');
+        const sinMonto = Number(req.body.monto) === 0;
+        const datos = {
+          detraccionMonto: req.body.monto,
+          detraccionConstancia: sinMonto ? null : req.body.constancia,
+          detraccionFecha: sinMonto || !req.body.constancia ? null : req.body.fecha,
+        };
+        const r = await req.db(async (tx) => {
+          const x = await tx.documentoComercial.update({ where: { id: d.id }, data: datos });
+          await auditar(tx, req, {
+            modulo, accion: 'compra.detraccion', recurso: nombre, recursoId: d.id, empresaId: d.empresaId,
+            antes: { monto: d.detraccionMonto, constancia: d.detraccionConstancia, fecha: d.detraccionFecha }, despues: datos,
+          });
+          return x;
+        });
+        res.json({ detraccionMonto: r.detraccionMonto, detraccionConstancia: r.detraccionConstancia, detraccionFecha: r.detraccionFecha });
+      },
+    );
+  }
+
+  router.post('/:id/confirmar', autorizar(`${p}.aprobar`), validar(z.object({ forzar: z.boolean().optional() }).optional().default({})), async (req, res) => {
     const d = await cargar(req, `${p}.aprobar`);
+    // Compras: antes de registrar, el comprobante del proveedor debe existir y estar vigente en SUNAT
+    const validacion = d.estado === 'BORRADOR' ? await validarEnSunat(req, d) : null;
+    if (validacion && ['NO_EXISTE', 'ANULADO', 'NO_AUTORIZADO'].includes(validacion.estado) && !req.body?.forzar) {
+      throw new HttpError(409, validacion.mensaje, { codigo: 'VALIDACION_SUNAT', estado: validacion.estado });
+    }
     const r = await req.db(
       async (tx) => {
         const r = await servicio.confirmar(tx, { tenantId: req.tenantId, id: d.id, usuarioId: req.user.id });
         await auditar(tx, req, {
           modulo, accion: `${nombre}.confirmar`, recurso: nombre, recursoId: d.id, empresaId: d.empresaId,
-          antes: { estado: 'BORRADOR' }, despues: { estado: 'CONFIRMADO', movimiento: r.movimiento.numero },
+          antes: { estado: 'BORRADOR' },
+          despues: {
+            estado: 'CONFIRMADO', movimiento: r.movimiento.numero,
+            ...(validacion && { validacionSunat: validacion.estado, ...(req.body?.forzar && { confirmadoPeseAValidacion: true }) }),
+          },
         });
         return r;
       },

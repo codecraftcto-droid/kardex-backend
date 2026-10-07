@@ -4,6 +4,7 @@
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { sincronizarCatalogo, crearEstudio, sembrarUnidades } from '../src/services/estudios.js';
+import { cargarBase } from '../src/contabilidad/servicio.js';
 import { registrarMovimiento } from '../src/kardex/servicio.js';
 import * as transferencias from '../src/kardex/transferencias.js';
 import * as comercial from '../src/comercial/documentos.js';
@@ -19,7 +20,7 @@ const DEMO_PASSWORD = 'Demo123!';
 const EMPRESAS = [
   {
     razonSocial: 'Comercial Andina S.A.C.',
-    ruc: '20601234567',
+    ruc: '20601234565',
     contacto: 'María Pérez',
     metodoValorizacion: 'PROMEDIO',
     sedes: [
@@ -46,7 +47,7 @@ const EMPRESAS = [
   },
   {
     razonSocial: 'Distribuidora del Sur E.I.R.L.',
-    ruc: '20609876543',
+    ruc: '20609876540',
     contacto: 'Jorge Quispe',
     metodoValorizacion: 'PEPS',
     sedes: [
@@ -315,6 +316,58 @@ async function asegurarCreditoDemo(empresa) {
   console.log('✔ Cliente con crédito demo: Carmen Rojas (límite S/ 500, 30 días, RUC 10456789124)');
 }
 
+/** Facturación electrónica demo: proveedor SIMULADO (responde como SUNAT, sin conexión real) */
+async function asegurarFacturacionDemo(tenantId, empresa) {
+  if (await prisma.configFacturacion.findUnique({ where: { empresaId: empresa.id } })) return;
+  await prisma.configFacturacion.create({ data: { tenantId, empresaId: empresa.id, proveedor: 'SIMULADO', ambiente: 'PRUEBAS', envioAutomatico: true } });
+  console.log('✔ Facturación electrónica demo: proveedor SIMULADO con envío automático');
+}
+
+/** Ubigeo y establecimiento de las sedes demo (puntos de partida/llegada de las guías de remisión) */
+async function asegurarUbigeosDemo() {
+  const datos = [
+    ['Sede Central', 'Av. Javier Prado Este 1234, San Isidro, Lima', '150131', '0000'],
+    ['Sede Arequipa', 'Calle Mercaderes 210, Arequipa', '040101', '0000'],
+    ['Sede Cusco', 'Av. de la Cultura 845, Cusco', '080101', '0001'],
+  ];
+  for (const [nombre, direccion, ubigeo, codigoEstablecimiento] of datos) {
+    await prisma.sede.updateMany({ where: { nombre, ubigeo: null }, data: { direccion, ubigeo, codigoEstablecimiento } });
+  }
+}
+
+/** SIRE demo: conexión SIMULADA (sin SUNAT) para probar períodos y sincronización */
+async function asegurarSireDemo(tenantId, empresa) {
+  if (await prisma.configSire.findUnique({ where: { empresaId: empresa.id } })) return;
+  await prisma.configSire.create({ data: { tenantId, empresaId: empresa.id, modo: 'SIMULADO' } });
+  console.log(`✔ SIRE demo (SIMULADO): ${empresa.razonSocial}`);
+}
+
+/**
+ * Cronograma de vencimientos REFERENCIAL para desarrollo: NO es el oficial. En producción lo carga
+ * la plataforma (Plataforma → Cronograma SUNAT) desde la resolución que SUNAT publica cada año.
+ * Patrón aproximado: desde el día 14 del mes siguiente, un día hábil más por cada grupo de dígitos.
+ */
+async function asegurarCronogramaReferencial() {
+  if (await prisma.cronogramaSunat.count()) return;
+  const desfase = { 0: 0, 1: 1, 2: 2, 3: 2, 4: 3, 5: 3, 6: 4, 7: 4, 8: 5, 9: 5, BC: 6 };
+  const datos = [];
+  for (const anio of [2025, 2026]) {
+    for (let mes = 1; mes <= 12; mes += 1) {
+      const periodo = `${anio}${String(mes).padStart(2, '0')}`;
+      for (const [grupo, habiles] of Object.entries(desfase)) {
+        const f = new Date(Date.UTC(mes === 12 ? anio + 1 : anio, mes % 12, 14));
+        for (let n = habiles; n > 0 || [0, 6].includes(f.getUTCDay()); ) {
+          f.setUTCDate(f.getUTCDate() + 1);
+          if (![0, 6].includes(f.getUTCDay())) n -= 1;
+        }
+        datos.push({ periodo, grupo, vencimiento: f });
+      }
+    }
+  }
+  await prisma.cronogramaSunat.createMany({ data: datos });
+  console.log('✔ Cronograma SUNAT REFERENCIAL 2025–2026 (reemplazar por el oficial)');
+}
+
 async function main() {
   await sincronizarCatalogo(prisma);
   console.log('✔ Catálogo de permisos sincronizado');
@@ -337,6 +390,24 @@ async function main() {
   const rolesActuales = Object.fromEntries((await prisma.rol.findMany({ where: { tenantId } })).map((r) => [r.nombre, r]));
   await asegurarPuntoVenta(tenantId, rolesActuales, rAndina);
   await asegurarCreditoDemo(rAndina.empresa);
+  await asegurarFacturacionDemo(tenantId, rAndina.empresa);
+  await asegurarFacturacionDemo(tenantId, rSur.empresa);
+  await asegurarUbigeosDemo();
+  await asegurarSireDemo(tenantId, rAndina.empresa);
+  await asegurarSireDemo(tenantId, rSur.empresa);
+  await asegurarCronogramaReferencial();
+  // SIRE y Contabilidad se venden aparte de los planes: el estudio demo los tiene como adicionales
+  const demo = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { modulosAdicionales: true } });
+  const faltan = ['sire', 'contabilidad'].filter((m) => !demo.modulosAdicionales.includes(m));
+  if (faltan.length) {
+    await prisma.tenant.update({ where: { id: tenantId }, data: { modulosAdicionales: [...demo.modulosAdicionales, ...faltan] } });
+    console.log(`✔ Estudio demo: módulos adicionales ${faltan.join(', ')}`);
+  }
+  // Plan contable PCGE base en Comercial Andina (Distribuidora del Sur queda sin plan, para probar la carga)
+  if (!(await prisma.cuentaContable.count({ where: { empresaId: rAndina.empresa.id } }))) {
+    const n = await cargarBase(prisma, { tenantId, empresaId: rAndina.empresa.id });
+    console.log(`✔ Plan contable PCGE base: ${n} cuentas en ${rAndina.empresa.razonSocial}`);
+  }
 
   // Portal cliente: solo lectura de su empresa (con excepción para exportar reportes)
   if (!(await prisma.usuario.findUnique({ where: { email: 'cliente@kardex.local' } }))) {

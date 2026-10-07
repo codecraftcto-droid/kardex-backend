@@ -21,6 +21,8 @@ const schema = z.object({
   IGV_TASA: z.coerce.number().min(0).max(1).default(0.18),
   /** Boletas desde este monto deben identificar al comprador (norma SUNAT) */
   BOLETA_UMBRAL_IDENTIFICACION: z.coerce.number().min(0).default(700),
+  /** Facturas desde este monto (exclusive) pueden estar sujetas a detracción o retención */
+  SPOT_UMBRAL: z.coerce.number().min(0).default(700),
   /** Carpeta de archivos de exportación (se borran a las 24 h) */
   REPORTES_DIR: z.string().default('./storage/reportes'),
   /** true: el worker de reportes corre dentro de la API; false: proceso aparte (npm run worker) */

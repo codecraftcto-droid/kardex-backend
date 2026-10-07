@@ -21,7 +21,7 @@ const esquema = z.object({
 
 const incluir = {
   empresa: { select: { id: true, razonSocial: true } },
-  sede: { select: { id: true, nombre: true } },
+  sede: { select: { id: true, nombre: true, direccion: true, ubigeo: true, codigoEstablecimiento: true } },
 };
 
 router.get('/', autorizar('almacenes.almacen.ver'), validar(filtroListado, 'query'), async (req, res) => {

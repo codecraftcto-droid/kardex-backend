@@ -27,6 +27,10 @@ import clientesRoutes from './modules/pos/clientes.routes.js';
 import posRoutes from './modules/pos/pos.routes.js';
 import cxcRoutes from './modules/cxc/cxc.routes.js';
 import panelRoutes from './modules/panel/panel.routes.js';
+import cpeRoutes from './modules/cpe/cpe.routes.js';
+import sireRoutes from './modules/sire/sire.routes.js';
+import contabilidadRoutes from './modules/contabilidad/contabilidad.routes.js';
+import greRoutes from './modules/gre/gre.routes.js';
 
 // Los identificadores BigInt (kardex, auditoría) se serializan como texto en JSON
 BigInt.prototype.toJSON = function toJSON() {
@@ -74,6 +78,10 @@ export function crearApp() {
   api.use('/pos', posRoutes);
   api.use('/cxc', cxcRoutes);
   api.use('/panel', panelRoutes);
+  api.use('/cpe', cpeRoutes);
+  api.use('/guias', greRoutes);
+  api.use('/sire', sireRoutes);
+  api.use('/contabilidad', contabilidadRoutes);
   app.use('/api', api);
 
   app.use(noEncontradoRuta);

@@ -274,4 +274,26 @@ describe('descuentos, crédito y cobranzas', () => {
     expect(r.body.movimientos.serie.at(-1).salidas).toBeGreaterThan(0);
     expect(r.body.cxc).toMatchObject({ saldo: '40', clientes: 1, clientesVencidos: 1 });
   });
+
+  it('crear usuario con su rol inicial; un rol incompatible no deja el usuario a medias', async () => {
+    const roles = (await api(T.admin).get('/roles')).body;
+    const rol = (n) => roles.find((r) => r.nombre === n);
+    expect([rol('Cajero').aptoOperador, rol('Contador').aptoOperador, rol('Cliente (portal)').aptoCliente]).toEqual([true, false, true]);
+
+    const base = (n, extra) => ({ nombres: n, email: `${n.toLowerCase()}-${sufijo}@test.local`, ...extra });
+    const ok = await api(T.admin).post('/usuarios', base('Vendedora', {
+      tipo: 'operador', empresaId: F.empresa.id, asignacion: { rolId: rol('Cajero').id, alcanceTipo: 'almacen', alcanceId: F.a1.id },
+    }));
+    expect(ok.status, JSON.stringify(ok.body)).toBe(201);
+    const det = (await api(T.admin).get(`/usuarios/${ok.body.id}`)).body;
+    expect(det.asignaciones.map((a) => [a.rol.nombre, a.alcanceTipo])).toEqual([['Cajero', 'almacen']]);
+
+    const malo = await api(T.admin).post('/usuarios', base('Intruso', {
+      tipo: 'operador', empresaId: F.empresa.id, asignacion: { rolId: rol('Contador').id, alcanceTipo: 'empresa', alcanceId: F.empresa.id },
+    }));
+    expect(malo.status).toBe(400);
+    expect(await prismaSystem.usuario.count({ where: { email: `intruso-${sufijo}@test.local` } })).toBe(0);
+    // Quien no gestiona roles no puede asignarlos al invitar
+    expect((await api(T.cajero).post('/usuarios', base('Otro', { asignacion: { rolId: rol('Cajero').id, alcanceTipo: 'estudio' } }))).status).toBe(403);
+  });
 });

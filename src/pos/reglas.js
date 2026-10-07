@@ -260,6 +260,64 @@ export function estadoCuotas(cuotas, montoCredito, saldoPendiente, hoy = hoyLima
 /** Tramo de antigüedad de una deuda según los días de atraso. */
 export const tramoAntiguedad = (dias) => (dias <= 0 ? 'porVencer' : dias <= 30 ? 'd1_30' : dias <= 60 ? 'd31_60' : dias <= 90 ? 'd61_90' : 'd90');
 
+// ───────────── SPOT (detracciones) y retención del IGV ─────────────
+
+/**
+ * Catálogo 54 de SUNAT (bienes y servicios sujetos a detracción) con su porcentaje.
+ * Verificar los porcentajes con la norma vigente: SUNAT los modifica por resolución.
+ */
+export const DETRACCIONES = {
+  '001': { nombre: 'Azúcar y melaza de caña', porcentaje: 10 },
+  '004': { nombre: 'Recursos hidrobiológicos', porcentaje: 4 },
+  '005': { nombre: 'Maíz amarillo duro', porcentaje: 4 },
+  '008': { nombre: 'Madera', porcentaje: 4 },
+  '009': { nombre: 'Arena y piedra', porcentaje: 10 },
+  '010': { nombre: 'Residuos, subproductos, desechos, recortes y desperdicios', porcentaje: 15 },
+  '012': { nombre: 'Intermediación laboral y tercerización', porcentaje: 12 },
+  '014': { nombre: 'Carnes y despojos comestibles', porcentaje: 4 },
+  '019': { nombre: 'Arrendamiento de bienes muebles', porcentaje: 10 },
+  '020': { nombre: 'Mantenimiento y reparación de bienes muebles', porcentaje: 12 },
+  '021': { nombre: 'Movimiento de carga', porcentaje: 10 },
+  '022': { nombre: 'Otros servicios empresariales', porcentaje: 12 },
+  '024': { nombre: 'Comisión mercantil', porcentaje: 10 },
+  '025': { nombre: 'Fabricación de bienes por encargo', porcentaje: 10 },
+  '026': { nombre: 'Servicio de transporte de personas', porcentaje: 10 },
+  '027': { nombre: 'Servicio de transporte de carga', porcentaje: 4 },
+  '030': { nombre: 'Contratos de construcción', porcentaje: 4 },
+  '031': { nombre: 'Oro gravado con el IGV', porcentaje: 10 },
+  '034': { nombre: 'Minerales metálicos no auríferos', porcentaje: 10 },
+  '035': { nombre: 'Bienes exonerados del IGV', porcentaje: 1.5 },
+  '037': { nombre: 'Demás servicios gravados con el IGV', porcentaje: 12 },
+};
+export const UMBRAL_SPOT = () => D(env.SPOT_UMBRAL);
+export const TASA_RETENCION = 3;
+
+/**
+ * Detracción y retención de una FACTURA (en boletas y notas de venta no aplican).
+ * - Detracción: total > umbral y algún ítem sujeto. Si hay varios códigos, el de mayor porcentaje.
+ *   El monto se redondea a soles enteros (así se deposita en el Banco de la Nación).
+ * - Retención 3%: total > umbral, operación con IGV, cliente agente de retención, el vendedor
+ *   no está exceptuado (buen contribuyente / agente) y no hay detracción (no se aplican ambas).
+ * Devuelve { detraccion: { codigo, porcentaje, monto } | null, retencion, aCobrar }.
+ */
+export function calcularSpot({ tipo, total, igv, codigosDetraccion = [], clienteAgenteRetencion = false, empresaExceptuada = false }) {
+  const t = D(total);
+  const sinNada = { detraccion: null, retencion: D(0), aCobrar: t };
+  if (tipo !== 'FACTURA' || !t.gt(UMBRAL_SPOT())) return sinNada;
+  const sujetos = [...new Set(codigosDetraccion.filter((c) => DETRACCIONES[c]))];
+  if (sujetos.length) {
+    const codigo = sujetos.sort((a, b) => DETRACCIONES[b].porcentaje - DETRACCIONES[a].porcentaje)[0];
+    const porcentaje = D(DETRACCIONES[codigo].porcentaje);
+    const monto = t.mul(porcentaje).div(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP);
+    return { detraccion: { codigo, porcentaje, monto }, retencion: D(0), aCobrar: t.sub(monto) };
+  }
+  if (clienteAgenteRetencion && !empresaExceptuada && D(igv).gt(0)) {
+    const retencion = r2(t.mul(TASA_RETENCION).div(100));
+    return { detraccion: null, retencion, aCobrar: t.sub(retencion) };
+  }
+  return sinNada;
+}
+
 // ───────────── Monto en letras ─────────────
 
 const UNIDADES = ['', 'UNO', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE', 'DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE', 'VEINTE', 'VEINTIUNO', 'VEINTIDÓS', 'VEINTITRÉS', 'VEINTICUATRO', 'VEINTICINCO', 'VEINTISÉIS', 'VEINTISIETE', 'VEINTIOCHO', 'VEINTINUEVE'];

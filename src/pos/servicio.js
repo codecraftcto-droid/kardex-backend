@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { autorizacionRequerida, conflicto, noEncontrado, prohibido, solicitudInvalida } from '../lib/errors.js';
 import { anularMovimiento, registrarMovimiento, siguienteValor } from '../kardex/servicio.js';
 import {
-  CLIENTES_VARIOS, aplicarDescuentos, aplicarPagos, aplicarPagosCredito, calcularLineas, cuotasIguales, errorCliente, errorCuotas,
+  CLIENTES_VARIOS, DETRACCIONES, aplicarDescuentos, calcularSpot, aplicarPagos, aplicarPagosCredito, calcularLineas, cuotasIguales, errorCliente, errorCuotas,
   estadoCuotas, hoyLima, identidadParaEmitir,
 } from './reglas.js';
 
@@ -168,13 +168,25 @@ export async function vender(tx, {
   const errCli = errorCliente(tipo, cliente, calculo.total);
   if (errCli) throw solicitudInvalida(errCli);
 
+  // SPOT / retención del IGV: el cliente paga el neto (la detracción la deposita en el Banco de la Nación)
+  const empresa = await tx.empresa.findUnique({ where: { id: caja.empresaId }, select: { cuentaDetracciones: true, exceptuadoRetencion: true } });
+  const spot = calcularSpot({
+    tipo, total: calculo.total, igv: calculo.igv,
+    codigosDetraccion: lineas.map((l) => productos.get(l.productoId).detraccionCodigo).filter(Boolean),
+    clienteAgenteRetencion: Boolean(registrado.agenteRetencion),
+    empresaExceptuada: empresa.exceptuadoRetencion,
+  });
+  if (spot.detraccion && !empresa.cuentaDetracciones) {
+    throw conflicto(`Factura sujeta a detracción (${DETRACCIONES[spot.detraccion.codigo].nombre}): registre la cuenta de detracciones del Banco de la Nación en los datos de la empresa`);
+  }
+
   let pago;
   let cuotasFinal = null;
   if (formaPago === 'CREDITO') {
     if (!permisos.credito) throw prohibido('No tiene permiso para vender al crédito');
     if (!registrado.id) throw solicitudInvalida('La venta al crédito exige un cliente registrado');
     if (!registrado.creditoHabilitado) throw conflicto(`${registrado.nombre} no tiene crédito habilitado`);
-    pago = aplicarPagosCredito(calculo.total, pagos);
+    pago = aplicarPagosCredito(spot.aCobrar, pagos);
     if (pago.error) throw solicitudInvalida(pago.error);
     cuotasFinal = cuotas?.length
       ? cuotas.map((c, i) => ({ numero: i + 1, monto: D(c.monto), fechaVencimiento: String(c.fechaVencimiento).slice(0, 10) }))
@@ -196,7 +208,7 @@ export async function vender(tx, {
     if (excede) notas.push(`Crédito sobre el límite (deuda previa S/ ${deuda.toFixed(2)})`);
     if (vencido.gt(0)) notas.push(`Crédito con deuda vencida S/ ${vencido.toFixed(2)}`);
   } else {
-    pago = aplicarPagos(calculo.total, pagos);
+    pago = aplicarPagos(spot.aCobrar, pagos);
     if (pago.error) throw solicitudInvalida(pago.error);
   }
 
@@ -206,6 +218,8 @@ export async function vender(tx, {
     extra: {
       observacion: observacion ?? null,
       descuentoGlobal: descuentos.descuentoGlobal,
+      ...(spot.detraccion && { detraccionCodigo: spot.detraccion.codigo, detraccionPorcentaje: spot.detraccion.porcentaje, detraccionMonto: spot.detraccion.monto }),
+      retencionMonto: spot.retencion,
       formaPago,
       montoCredito: pago.montoCredito ?? 0,
       saldoPendiente: pago.montoCredito ?? 0,

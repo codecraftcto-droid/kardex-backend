@@ -9,6 +9,7 @@ import { hashPassword, verificarPassword, esquemaPassword } from '../../services
 import { revocarSesiones, revocarSesionesUsuario } from '../../services/sesiones.js';
 import * as mfa from '../../services/mfa.js';
 import { usoDelPlan } from '../../services/limites.js';
+import { modulosEfectivos } from '../../rbac/modulos.js';
 import { conflicto } from '../../lib/errors.js';
 
 const router = Router();
@@ -20,11 +21,13 @@ router.get('/', async (req, res) => {
       select: {
         id: true, nombres: true, email: true, documento: true, cargo: true, telefono: true,
         tipo: true, empresaId: true, mfaActivo: true, ultimoAcceso: true,
-        tenant: { select: { id: true, nombre: true } },
+        tenant: { select: { id: true, nombre: true, modulosAdicionales: true, plan: { select: { modulos: true, nombre: true } } } },
       },
     }),
   );
-  res.json(usuario);
+  // Módulos contratados por el estudio (los permisos ya vienen filtrados por ellos)
+  const { tenant, ...resto } = usuario;
+  res.json({ ...resto, tenant: { id: tenant.id, nombre: tenant.nombre, plan: tenant.plan?.nombre ?? null }, modulos: [...modulosEfectivos(tenant)] });
 });
 
 /** Permisos efectivos y alcances (el frontend los usa para menús, rutas y botones). */

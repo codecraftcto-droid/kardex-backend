@@ -6,10 +6,16 @@ import { redis } from './lib/redis.js';
 import { crearApp } from './app.js';
 import { iniciarSocket } from './realtime/socket.js';
 import { detenerColas, iniciarWorkerReportes } from './reportes/cola.js';
+import { detenerCpe, iniciarWorkerCpe } from './cpe/cola.js';
+import { detenerSire, iniciarWorkerSire } from './sire/cola.js';
 
 const server = http.createServer(crearApp());
 iniciarSocket(server);
-if (env.REPORTES_WORKER_EMBEBIDO) await iniciarWorkerReportes();
+if (env.REPORTES_WORKER_EMBEBIDO) {
+  await iniciarWorkerReportes();
+  await iniciarWorkerCpe();
+  await iniciarWorkerSire();
+}
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
@@ -24,6 +30,8 @@ async function apagar(senal) {
   logger.info(`${senal} recibido, cerrando...`);
   server.close();
   await detenerColas();
+  await detenerCpe();
+  await detenerSire();
   await Promise.allSettled([prismaApp.$disconnect(), prismaSystem.$disconnect(), redis.quit()]);
   process.exit(0);
 }

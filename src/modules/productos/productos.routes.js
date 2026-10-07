@@ -7,6 +7,7 @@ import { emitir } from '../../realtime/socket.js';
 import { paginacion, respuestaPaginada } from '../../lib/http.js';
 import { textoOpcional } from '../../lib/esquemas.js';
 import { conflicto, solicitudInvalida } from '../../lib/errors.js';
+import { DETRACCIONES } from '../../pos/reglas.js';
 
 const router = Router();
 const uuid = /^[0-9a-f-]{36}$/i;
@@ -34,6 +35,8 @@ const esquema = z.object({
   unidadId: z.uuid(),
   precioReferencial: z.coerce.number().min(0).nullish().transform((v) => (v === undefined ? null : v)),
   afectacionIgv: z.enum(['10', '20', '30']).default('10'),
+  /** Bien o servicio sujeto a detracción (catálogo 54) */
+  detraccionCodigo: z.enum(Object.keys(DETRACCIONES)).nullish().transform((v) => v ?? null),
 });
 
 async function validarReferencias(tx, empresaId, { categoriaId, unidadId }) {

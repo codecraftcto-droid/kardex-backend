@@ -9,6 +9,9 @@ import { paginacion, respuestaPaginada } from '../lib/http.js';
 import { validar } from '../middleware/validar.js';
 import { contarConexiones } from '../realtime/socket.js';
 import { auditarPlataforma, soloAdmin } from './middleware.js';
+import { CODIGOS_MODULO, MODULOS } from '../rbac/modulos.js';
+import { invalidarPermisosEstudio } from '../rbac/servicio.js';
+import { GRUPOS_CRONOGRAMA, desplazar, esPeriodo } from '../sire/periodos.js';
 
 const router = Router();
 const uuid = z.uuid();
@@ -24,8 +27,12 @@ const esquemaPlan = z.object({
   maxEmpresas: limite,
   maxUsuarios: limite,
   maxAlmacenes: limite,
+  modulos: z.array(z.enum(CODIGOS_MODULO)).min(1, 'El plan debe incluir al menos un módulo').transform((m) => [...new Set(m)]),
   activo: z.boolean().default(true),
 });
+
+/** Catálogo de módulos vendibles (para armar planes y contratos) */
+router.get('/modulos', (_req, res) => res.json(Object.entries(MODULOS).map(([codigo, m]) => ({ codigo, ...m }))));
 
 router.get('/planes', async (_req, res) => {
   res.json(await prismaSystem.plan.findMany({ orderBy: { precioMensual: 'asc' }, include: { _count: { select: { estudios: true } } } }));
@@ -49,6 +56,9 @@ router.put('/planes/:id', soloAdmin, validar(esquemaPlan), async (req, res) => {
     await auditarPlataforma(req, { accion: 'plan.editar', recurso: 'plan', recursoId: p.id, antes, despues: p }, tx);
     return p;
   });
+  // Los estudios de este plan ganan o pierden módulos al instante
+  const estudios = await prismaSystem.tenant.findMany({ where: { planId: plan.id }, select: { id: true } });
+  await invalidarPermisosEstudio(estudios.map((e) => e.id));
   res.json(plan);
 });
 
@@ -184,5 +194,49 @@ router.get(
     res.json(respuestaPaginada(filas.map((f) => ({ ...f, admin: nA.get(f.adminId) ?? null, estudio: nE.get(f.tenantId) ?? null })), total, pag));
   },
 );
+
+// ───────────── Cronograma de vencimientos SUNAT (global) ─────────────
+
+/** Cronograma de un año: [{ periodo, fechas: { '0': 'AAAA-MM-DD', …, '9', 'BC' } }] */
+router.get('/cronograma', async (req, res) => {
+  const anio = Number(req.query.anio) || new Date().getFullYear();
+  const filas = await prismaSystem.cronogramaSunat.findMany({ where: { periodo: { startsWith: String(anio) } }, orderBy: [{ periodo: 'asc' }, { grupo: 'asc' }] });
+  const porPeriodo = new Map();
+  for (const f of filas) {
+    if (!porPeriodo.has(f.periodo)) porPeriodo.set(f.periodo, {});
+    porPeriodo.get(f.periodo)[f.grupo] = f.vencimiento.toISOString().slice(0, 10);
+  }
+  res.json({ anio, grupos: GRUPOS_CRONOGRAMA, periodos: [...porPeriodo].map(([periodo, fechas]) => ({ periodo, fechas })) });
+});
+
+const fechaIso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha AAAA-MM-DD');
+const esquemaCronograma = z.object({
+  anio: z.coerce.number().int().min(2020).max(2100),
+  periodos: z.array(z.object({
+    periodo: z.string().refine(esPeriodo, 'Período AAAAMM'),
+    fechas: z.record(z.enum(GRUPOS_CRONOGRAMA), fechaIso),
+  })).max(12),
+}).superRefine((d, ctx) => {
+  d.periodos.forEach((p, i) => {
+    if (!p.periodo.startsWith(String(d.anio))) ctx.addIssue({ code: 'custom', path: ['periodos', i], message: `El período ${p.periodo} no es del ${d.anio}` });
+    // El vencimiento cae en el mes siguiente al período (o después)
+    const minimo = `${desplazar(p.periodo, 1).slice(0, 4)}-${desplazar(p.periodo, 1).slice(4)}-01`;
+    for (const [g, f] of Object.entries(p.fechas)) {
+      if (f < minimo) ctx.addIssue({ code: 'custom', path: ['periodos', i, g], message: `${p.periodo}, grupo ${g}: el vencimiento debe ser desde ${minimo}` });
+    }
+  });
+});
+
+/** Reemplaza el cronograma del año (lo publica SUNAT cada fin de año por resolución). */
+router.put('/cronograma', soloAdmin, validar(esquemaCronograma), async (req, res) => {
+  const { anio, periodos } = req.body;
+  const datos = periodos.flatMap((p) => Object.entries(p.fechas).map(([grupo, f]) => ({ periodo: p.periodo, grupo, vencimiento: new Date(`${f}T00:00:00Z`) })));
+  await prismaSystem.$transaction(async (tx) => {
+    await tx.cronogramaSunat.deleteMany({ where: { periodo: { startsWith: String(anio) } } });
+    await tx.cronogramaSunat.createMany({ data: datos });
+    await auditarPlataforma(req, { accion: 'cronograma.editar', recurso: 'cronograma', recursoId: String(anio), despues: { anio, fechas: datos.length } }, tx);
+  });
+  res.json({ anio, fechas: datos.length });
+});
 
 export default router;

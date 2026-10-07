@@ -22,6 +22,10 @@ const esquema = z.object({
   telefono: textoOpcional(30),
   direccion: textoOpcional(255),
   nombreComercial: textoOpcional(150),
+  /** Cuenta de detracciones del Banco de la Nación (facturas sujetas al SPOT) */
+  cuentaDetracciones: z.string().trim().regex(/^[\d-]{8,20}$/, 'Número de cuenta inválido').nullish().or(z.literal('')).transform((v) => v || null),
+  exceptuadoRetencion: z.boolean().optional(),
+  buenContribuyente: z.boolean().optional(),
   metodoValorizacion: z.enum(['PEPS', 'PROMEDIO']).default('PROMEDIO'),
 });
 

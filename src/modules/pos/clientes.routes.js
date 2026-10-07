@@ -38,6 +38,7 @@ const esquema = z
     limiteCredito: z.union([z.string(), z.number()]).nullish().transform((v) => (v === '' || v == null ? null : String(v).trim()))
       .refine((v) => v == null || /^\d{1,12}(\.\d{1,2})?$/.test(v), 'Límite inválido'),
     diasCredito: z.coerce.number().int().min(0).max(365).optional(),
+    agenteRetencion: z.boolean().optional(),
   })
   .superRefine((v, ctx) => {
     const e = errorDocumento(v.tipoDocumento, v.numeroDocumento);

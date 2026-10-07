@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { autorizar, alcance } from '../../middleware/autorizar.js';
 import { validar } from '../../middleware/validar.js';
 import { email } from '../../lib/esquemas.js';
-import { puedeEnAlcance } from '../../rbac/resolver.js';
+import { puedeEnAlcance, tieneAlguno } from '../../rbac/resolver.js';
 import { invalidarPermisos, verificarAdministradorRestante } from '../../rbac/servicio.js';
 import { CATALOGO_PERMISOS, PERMISOS_OPERADOR } from '../../rbac/catalogo.js';
 import { auditar } from '../../services/auditoria.js';
@@ -82,6 +82,32 @@ function validarReglasCliente(objetivo, destino, codigos) {
         : `Un usuario operador solo puede tener permisos de lectura, caja y clientes: ${fuera.join(', ')}`,
     );
   }
+}
+
+/**
+ * Asigna un rol con alcance a un usuario, con todas las reglas: gestión sobre el alcance,
+ * anti-escalamiento (debe tener TODOS los permisos del rol ahí) y reglas de cliente/operador.
+ */
+async function asignarRol(tx, req, objetivo, { rolId, alcanceTipo, alcanceId: id }) {
+  const alcanceId = alcanceTipo === 'estudio' ? null : id;
+  const destino = await resolverAlcance(tx, alcanceTipo, alcanceId);
+  validarGestionSobre(req, objetivo, destino);
+  const rol = await tx.rol.findUnique({
+    where: { id: rolId },
+    include: { permisos: { select: { permiso: { select: { codigo: true } } } } },
+  });
+  if (!rol) throw noEncontrado('Rol no encontrado');
+  if (!rol.activo) throw conflicto('El rol está desactivado');
+  const codigos = rol.permisos.map((p) => p.permiso.codigo);
+  const ajenos = codigos.filter((c) => !puedeEnAlcance(req.permisos, c, destino));
+  if (ajenos.length) throw prohibido(`No puede asignar un rol con permisos que usted no tiene en ese alcance: ${ajenos.join(', ')}`);
+  validarReglasCliente(objetivo, destino, codigos);
+  const creada = await tx.usuarioRol.create({ data: { tenantId: req.tenantId, usuarioId: objetivo.id, rolId, alcanceTipo, alcanceId } });
+  await auditar(tx, req, {
+    modulo: 'usuarios', accion: 'asignacion.crear', recurso: 'usuario', recursoId: objetivo.id,
+    empresaId: destino.empresaId, despues: { rol: rol.nombre, alcanceTipo, alcanceId },
+  });
+  return creada;
 }
 
 // ───────────── CRUD ─────────────
@@ -172,17 +198,23 @@ router.post(
         email: email(),
         tipo: z.enum(['interno', 'cliente', 'operador']).default('interno'),
         empresaId: uuid.nullish(),
+        /** Rol inicial (opcional): se asigna en la misma operación */
+        asignacion: esquemaAlcance.and(z.object({ rolId: uuid })).nullish(),
       })
       .refine((v) => v.tipo === 'interno' || v.empresaId, { message: 'Los usuarios cliente y operador requieren empresa', path: ['empresaId'] }),
   ),
   async (req, res) => {
-    const datos = { ...req.body, empresaId: req.body.tipo === 'interno' ? null : req.body.empresaId };
+    const { asignacion, ...resto } = req.body;
+    const datos = { ...resto, empresaId: resto.tipo === 'interno' ? null : resto.empresaId };
+    if (asignacion && !tieneAlguno(req.permisos, 'usuarios.roles.gestionar')) throw prohibido('No tiene permiso para asignar roles');
     const { usuario, token } = await req.db(async (tx) => {
       if (datos.empresaId && !(await tx.empresa.findUnique({ where: { id: datos.empresaId } }))) {
         throw solicitudInvalida('Empresa no encontrada');
       }
       await verificarLimite(tx, req.tenantId, 'usuarios');
       const creado = await tx.usuario.create({ data: { ...datos, tenantId: req.tenantId, estado: 'pendiente' } });
+      // Si el rol no es válido (alcance, anti-escalamiento, tipo de usuario) no se crea nada
+      if (asignacion) await asignarRol(tx, req, creado, asignacion);
       const token = await crearInvitacion(tx, creado);
       await auditar(tx, req, { modulo: 'usuarios', accion: 'usuario.invitar', recurso: 'usuario', recursoId: creado.id, empresaId: creado.empresaId, despues: creado });
       return { usuario: creado, token };
@@ -286,35 +318,7 @@ router.post(
   autorizar('usuarios.roles.gestionar'),
   validar(esquemaAlcance.and(z.object({ rolId: uuid }))),
   async (req, res) => {
-    const { rolId, alcanceTipo } = req.body;
-    const alcanceId = alcanceTipo === 'estudio' ? null : req.body.alcanceId;
-    const asignacion = await req.db(async (tx) => {
-      const objetivo = await cargarUsuario(tx, req.params.id);
-      const destino = await resolverAlcance(tx, alcanceTipo, alcanceId);
-      validarGestionSobre(req, objetivo, destino);
-
-      const rol = await tx.rol.findUnique({
-        where: { id: rolId },
-        include: { permisos: { select: { permiso: { select: { codigo: true } } } } },
-      });
-      if (!rol) throw noEncontrado('Rol no encontrado');
-      if (!rol.activo) throw conflicto('El rol está desactivado');
-      const codigos = rol.permisos.map((p) => p.permiso.codigo);
-
-      // Anti-escalamiento: debe tener TODOS los permisos del rol sobre el alcance destino
-      const ajenos = codigos.filter((c) => !puedeEnAlcance(req.permisos, c, destino));
-      if (ajenos.length) throw prohibido(`No puede asignar un rol con permisos que usted no tiene en ese alcance: ${ajenos.join(', ')}`);
-      validarReglasCliente(objetivo, destino, codigos);
-
-      const creada = await tx.usuarioRol.create({
-        data: { tenantId: req.tenantId, usuarioId: objetivo.id, rolId, alcanceTipo, alcanceId },
-      });
-      await auditar(tx, req, {
-        modulo: 'usuarios', accion: 'asignacion.crear', recurso: 'usuario', recursoId: objetivo.id,
-        empresaId: destino.empresaId, despues: { rol: rol.nombre, alcanceTipo, alcanceId },
-      });
-      return creada;
-    });
+    const asignacion = await req.db(async (tx) => asignarRol(tx, req, await cargarUsuario(tx, req.params.id), req.body));
     await invalidarPermisos([req.params.id]);
     res.status(201).json(asignacion);
   },

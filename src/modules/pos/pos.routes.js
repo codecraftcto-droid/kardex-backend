@@ -16,6 +16,8 @@ import { paginacion, respuestaPaginada } from '../../lib/http.js';
 import { textoOpcional } from '../../lib/esquemas.js';
 import { conflicto, noEncontrado, prohibido, solicitudInvalida } from '../../lib/errors.js';
 import * as pos from '../../pos/servicio.js';
+import { encolarBaja, encolarEnvio } from '../../cpe/cola.js';
+import { ELECTRONICOS } from '../../cpe/servicio.js';
 import { CODIGO_COMPROBANTE, CODIGO_DOC, NOMBRE_COMPROBANTE, estadoCuotas, montoEnLetras } from '../../pos/reglas.js';
 
 /**
@@ -44,6 +46,13 @@ const conPermisos = async (req, _res, next) => {
   req.permisos = await obtenerPermisos(req.user);
   next();
 };
+
+/** Envío automático a SUNAT si la empresa lo tiene activado (en segundo plano: no frena la venta) */
+async function enviarSiCorresponde(req, c) {
+  if (!ELECTRONICOS.includes(c.tipo)) return;
+  const cfg = await req.db((tx) => tx.configFacturacion.findUnique({ where: { empresaId: c.empresaId }, select: { activo: true, envioAutomatico: true } }));
+  if (cfg?.activo && cfg.envioAutomatico) await encolarEnvio(req.tenantId, c.id);
+}
 
 function notificarVenta(c, kardex) {
   emitir('pos:comprobante', { almacenId: c.almacenId }, { id: c.id, tipo: c.tipo, serie: c.serie, numero: c.numero, cajaId: c.cajaId });
@@ -89,6 +98,8 @@ router.get('/cajas', conPermisos, validar(z.object({ empresaId: z.uuid() }), 'qu
       where: { empresaId: req.validQuery.empresaId },
       include: {
         almacen: { select: { codigo: true, nombre: true, sede: { select: { nombre: true } } } },
+        // Datos tributarios para calcular detracción / retención en la caja
+        empresa: { select: { cuentaDetracciones: true, exceptuadoRetencion: true } },
         sesiones: { where: { estado: 'ABIERTA' }, select: { id: true, usuarioId: true, abiertaEn: true, montoApertura: true } },
       },
       orderBy: { nombre: 'asc' },
@@ -360,6 +371,7 @@ router.post('/ventas', conPermisos, validar(esquemaVenta), async (req, res) => {
   // Los pases de autorización son de un solo uso
   if (autorizaciones?.length) await redis.del(...autorizaciones.map(claveAutorizacion));
   notificarVenta(r.comprobante, r.kardex);
+  await enviarSiCorresponde(req, r.comprobante);
   if (r.comprobante.formaPago === 'CREDITO') emitir('cxc:cambio', { empresaId: caja.empresaId }, { clienteId: r.comprobante.clienteId });
   res.status(201).json({
     id: r.comprobante.id, serie: r.comprobante.serie, numero: r.comprobante.numero, total: r.comprobante.total, vuelto: r.comprobante.vuelto,
@@ -377,6 +389,7 @@ router.get(
       empresaId: z.uuid(),
       tipo: z.enum(['FACTURA', 'BOLETA', 'NOTA_VENTA', 'NOTA_CREDITO']).optional(),
       estado: z.enum(['EMITIDO', 'ANULADO']).optional(),
+      estadoSunat: z.enum(['PENDIENTE', 'ENVIADO', 'ACEPTADO', 'OBSERVADO', 'RECHAZADO', 'ANULADO']).optional(),
       cajaId: z.uuid().optional(),
       sesionCajaId: z.uuid().optional(),
       desde: z.coerce.date().optional(),
@@ -391,7 +404,7 @@ router.get(
     const pag = paginacion(req.validQuery);
     const alcance = whereAlcance(req.permisos, 'pos.venta.ver', 'registro');
     if (!alcance) return res.json(respuestaPaginada([], 0, pag));
-    const { empresaId, tipo, estado, cajaId, sesionCajaId, desde, hasta, q } = req.validQuery;
+    const { empresaId, tipo, estado, estadoSunat, cajaId, sesionCajaId, desde, hasta, q } = req.validQuery;
     const numero = q && /^\d+$/.test(q.split('-').at(-1)) ? Number(q.split('-').at(-1)) : null;
     const where = {
       AND: [
@@ -399,6 +412,7 @@ router.get(
         { empresaId },
         tipo ? { tipo } : {},
         estado ? { estado } : {},
+        estadoSunat ? { estadoSunat } : {},
         cajaId ? { cajaId } : {},
         sesionCajaId ? { sesionCajaId } : {},
         desde || hasta ? { fechaEmision: { ...(desde && { gte: desde }), ...(hasta && { lte: hasta }) } } : {},
@@ -430,7 +444,7 @@ router.get('/comprobantes/:id', conPermisos, async (req, res) => {
   const c = await cargar(req, 'comprobante', req.params.id, 'pos.venta.ver', {
     detalles: { orderBy: { id: 'asc' } },
     pagos: true,
-    empresa: { select: { razonSocial: true, nombreComercial: true, ruc: true, direccion: true } },
+    empresa: { select: { razonSocial: true, nombreComercial: true, ruc: true, direccion: true, cuentaDetracciones: true } },
     caja: { select: { nombre: true, almacen: { select: { nombre: true, sede: { select: { nombre: true, direccion: true } } } } } },
     sesion: { select: { estado: true, usuarioId: true } },
     referencia: { select: { id: true, tipo: true, serie: true, numero: true, fechaEmision: true } },
@@ -456,7 +470,8 @@ router.get('/comprobantes/:id', conPermisos, async (req, res) => {
     cajero: cajero?.nombres,
     autorizadoPor: autorizador?.nombres ?? null,
     cuotas: c.formaPago === 'CREDITO' ? estadoCuotas(c.cuotas, c.montoCredito, c.estado === 'ANULADO' ? c.montoCredito : c.saldoPendiente) : [],
-    qr: esElectronico ? await QRCode.toDataURL(textoQR(c, c.empresa), { margin: 1, width: 180 }) : null,
+    // QR oficial (con el hash que devuelve SUNAT/proveedor) cuando ya existe; si no, el provisional
+    qr: esElectronico ? await QRCode.toDataURL(c.sunatQr || textoQR(c, c.empresa), { margin: 1, width: 180 }) : null,
     acciones: {
       anular: c.estado === 'EMITIDO' && c.sesion.estado === 'ABIERTA' && !c.notasCredito.some((n) => n.estado === 'EMITIDO')
         && !c.cobranzas.some((k) => k.estado === 'VIGENTE') && puede(req.permisos, 'pos.venta.anular', r),
@@ -480,6 +495,8 @@ router.post('/comprobantes/:id/anular', conPermisos, validar(z.object({ motivo: 
     { timeout: 20000 },
   );
   notificarVenta(c, r.kardex);
+  // Ya estaba en SUNAT: se comunica la baja. Si nunca se envió, no hay nada que comunicar.
+  if (c.sunatEnviadoEn && ['ACEPTADO', 'OBSERVADO', 'ENVIADO'].includes(c.estadoSunat)) await encolarBaja(req.tenantId, c.id, req.body.motivo);
   if (c.formaPago === 'CREDITO' || c.tipo === 'NOTA_CREDITO') emitir('cxc:cambio', { empresaId: c.empresaId }, { clienteId: c.clienteId });
   res.json({ id: c.id, estado: 'ANULADO' });
 });
@@ -512,6 +529,7 @@ router.post(
       { timeout: 20000 },
     );
     notificarVenta(r.comprobante, r.kardex);
+    await enviarSiCorresponde(req, r.comprobante);
     if (Number(r.comprobante.aplicadoASaldo) > 0) emitir('cxc:cambio', { empresaId: caja.empresaId }, { clienteId: r.comprobante.clienteId });
     res.status(201).json({ id: r.comprobante.id, serie: r.comprobante.serie, numero: r.comprobante.numero, total: r.comprobante.total, aplicadoASaldo: r.comprobante.aplicadoASaldo });
   },

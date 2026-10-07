@@ -82,6 +82,27 @@ const definiciones = [
   ['cxc', 'cxc.cobranza.anular', 'Anular cobranzas', true],
   ['cxc', 'cxc.credito.autorizar', 'Autorizar créditos sobre el límite o con deuda vencida', true],
 
+  ['cpe', 'cpe.configuracion.editar', 'Configurar la facturación electrónica de la empresa (proveedor y token)', true],
+  ['cpe', 'cpe.envio.gestionar', 'Reenviar comprobantes a SUNAT y consultar su estado'],
+
+  ['gre', 'gre.guia.ver', 'Ver guías de remisión'],
+  ['gre', 'gre.guia.crear', 'Emitir guías de remisión electrónicas'],
+
+  ['contabilidad', 'contabilidad.plan.ver', 'Ver el plan contable y la configuración de cuentas de la empresa'],
+  ['contabilidad', 'contabilidad.plan.editar', 'Crear, modificar y eliminar cuentas del plan contable', true],
+  ['contabilidad', 'contabilidad.asiento.ver', 'Ver asientos contables y el estado de la contabilización'],
+  ['contabilidad', 'contabilidad.asiento.generar', 'Contabilizar un período (generar y regenerar los asientos automáticos)', true],
+  ['contabilidad', 'contabilidad.estados.ver', 'Ver la hoja de trabajo y los estados financieros'],
+  ['contabilidad', 'contabilidad.ejercicio.cerrar', 'Generar el asiento de cierre del ejercicio', true],
+  ['contabilidad', 'contabilidad.asiento.registrar', 'Registrar, editar y eliminar asientos manuales', true],
+  ['contabilidad', 'contabilidad.periodo.cerrar', 'Cerrar un período contable', true],
+  ['contabilidad', 'contabilidad.periodo.reabrir', 'Reabrir un período contable cerrado', true],
+  ['contabilidad', 'contabilidad.configuracion.editar', 'Configurar las cuentas que usa cada operación en los asientos automáticos', true],
+
+  ['sire', 'sire.periodo.ver', 'Ver los períodos tributarios, vencimientos y el avance de los registros SIRE'],
+  ['sire', 'sire.registro.gestionar', 'Sincronizar con SUNAT, descargar propuestas, conciliar y generar los registros SIRE', true],
+  ['sire', 'sire.configuracion.editar', 'Configurar las credenciales SIRE de la empresa (usuario SOL y API)', true],
+
   ['reporte', 'reporte.stock.ver', 'Reporte de stock'],
   ['reporte', 'reporte.movimientos.ver', 'Reporte de movimientos'],
   ['reporte', 'reporte.valorizacion.ver', 'Reporte de valorización', true],
@@ -136,6 +157,7 @@ export const ROLES_PLANTILLA = [
       'pos.venta.crear',
       'pos.venta.credito',
       'cxc.cobranza.crear',
+      'gre.guia.crear',
     ],
   },
   {
@@ -151,6 +173,8 @@ export const ROLES_PLANTILLA = [
       'transferencia.solicitar',
       'transferencia.despachar',
       'transferencia.recibir',
+      'gre.guia.ver',
+      'gre.guia.crear',
     ],
   },
   {
@@ -171,6 +195,8 @@ export const ROLES_PLANTILLA = [
       'reporte.ventas.ver',
       'cxc.cuenta.ver',
       'reporte.cxc.ver',
+      'gre.guia.ver',
+      'sire.periodo.ver',
     ],
   },
   {
@@ -182,6 +208,9 @@ export const ROLES_PLANTILLA = [
       'pos.venta.credito',
       'cxc.cuenta.ver',
       'cxc.cobranza.crear',
+      'cpe.envio.gestionar',
+      'gre.guia.ver',
+      'gre.guia.crear',
       'clientes.cliente.ver',
       'clientes.cliente.crear',
       'clientes.cliente.editar',
@@ -196,7 +225,11 @@ export const ROLES_PLANTILLA = [
  * los de solo lectura más los del punto de venta, clientes y cobranzas, siempre dentro de su empresa.
  */
 export const PERMISOS_OPERADOR = new Set(
-  CATALOGO_PERMISOS.filter((p) => p.lectura || ['pos', 'clientes', 'cxc'].includes(p.modulo)).map((p) => p.codigo),
+  [
+    ...CATALOGO_PERMISOS.filter((p) => p.lectura || ['pos', 'clientes', 'cxc'].includes(p.modulo)).map((p) => p.codigo),
+    'cpe.envio.gestionar',
+    'gre.guia.crear',
+  ],
 );
 
 /** Permiso que identifica a un "administrador" (para la regla del último administrador). */

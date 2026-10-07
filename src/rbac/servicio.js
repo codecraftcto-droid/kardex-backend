@@ -1,8 +1,9 @@
-import { withTenant } from '../lib/prisma.js';
+import { prismaSystem, withTenant } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
 import { conflicto } from '../lib/errors.js';
 import { CATALOGO_PERMISOS, PERMISO_ADMIN, PERMISOS_OPERADOR } from './catalogo.js';
 import { construirPermisos } from './resolver.js';
+import { modulosEfectivos, permisoHabilitado } from './modulos.js';
 import { reevaluarSalasUsuario } from '../realtime/socket.js';
 
 const CLAVE = (usuarioId) => `rbac:permisos:${usuarioId}`;
@@ -46,8 +47,14 @@ async function resolverAlcances(tx, filas) {
 }
 
 export async function calcularPermisos(tx, usuarioId) {
-  const usuario = await tx.usuario.findUnique({ where: { id: usuarioId }, select: { tipo: true, empresaId: true } });
+  const usuario = await tx.usuario.findUnique({
+    where: { id: usuarioId },
+    select: { tipo: true, empresaId: true, tenant: { select: { modulosAdicionales: true, plan: { select: { modulos: true } } } } },
+  });
   if (!usuario) return construirPermisos({ tipoUsuario: 'interno', asignaciones: [] });
+  // Solo los permisos de los módulos que el estudio tiene contratados
+  const modulos = modulosEfectivos(usuario.tenant);
+  const habilitado = (codigo) => permisoHabilitado(codigo, modulos);
 
   const [asignaciones, excepciones] = await Promise.all([
     tx.usuarioRol.findMany({
@@ -71,11 +78,11 @@ export async function calcularPermisos(tx, usuarioId) {
     permisosLectura: PERMISOS_LECTURA,
     permisosOperador: PERMISOS_OPERADOR,
     asignaciones: asignaciones
-      .map((a) => ({ alcance: alcanceDe(a), permisos: a.rol.permisos.map((rp) => rp.permiso.codigo) }))
+      .map((a) => ({ alcance: alcanceDe(a), permisos: a.rol.permisos.map((rp) => rp.permiso.codigo).filter(habilitado) }))
       .filter((a) => a.alcance),
     excepciones: excepciones
       .map((e) => ({ alcance: alcanceDe(e), permiso: e.permiso.codigo, efecto: e.efecto }))
-      .filter((e) => e.alcance),
+      .filter((e) => e.alcance && habilitado(e.permiso)),
   });
 }
 
@@ -97,6 +104,12 @@ export async function invalidarPermisos(usuarioIds) {
   if (!ids.length) return;
   await redis.del(...ids.map(CLAVE));
   await Promise.all(ids.map((id) => reevaluarSalasUsuario(id)));
+}
+
+/** Al cambiar los módulos de un estudio (plan o adicionales) sus permisos se recalculan. */
+export async function invalidarPermisosEstudio(tenantIds) {
+  const usuarios = await prismaSystem.usuario.findMany({ where: { tenantId: { in: [].concat(tenantIds) } }, select: { id: true } });
+  await invalidarPermisos(usuarios.map((u) => u.id));
 }
 
 export async function usuariosConRol(tx, rolId) {

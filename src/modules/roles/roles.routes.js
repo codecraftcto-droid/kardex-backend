@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { autorizar, alcance } from '../../middleware/autorizar.js';
 import { validar } from '../../middleware/validar.js';
 import { tieneAlguno } from '../../rbac/resolver.js';
+import { CATALOGO_PERMISOS, PERMISOS_OPERADOR } from '../../rbac/catalogo.js';
+
+const PERMISOS_LECTURA = new Set(CATALOGO_PERMISOS.filter((p) => p.lectura).map((p) => p.codigo));
 import { invalidarPermisos, usuariosConRol, verificarAdministradorRestante } from '../../rbac/servicio.js';
 import { auditar } from '../../services/auditoria.js';
 import { conflicto, noEncontrado, prohibido, solicitudInvalida } from '../../lib/errors.js';
@@ -47,16 +50,28 @@ router.get('/', ver, async (req, res) => {
   const roles = await req.db((tx) =>
     tx.rol.findMany({
       orderBy: [{ esSistema: 'desc' }, { nombre: 'asc' }],
-      include: { _count: { select: { permisos: true, asignaciones: true } } },
+      include: { _count: { select: { permisos: true, asignaciones: true } }, ...incluirPermisos },
     }),
   );
-  res.json(roles);
+  // Para qué tipo de usuario sirve cada rol (sin exponer la lista de permisos)
+  res.json(
+    roles.map(({ permisos, ...r }) => {
+      const codigos = permisos.map((p) => p.permiso.codigo);
+      return { ...r, aptoCliente: codigos.every((c) => PERMISOS_LECTURA.has(c)), aptoOperador: codigos.every((c) => PERMISOS_OPERADOR.has(c)) };
+    }),
+  );
 });
 
 router.get('/:id', ver, async (req, res) => {
-  const rol = await req.db((tx) => tx.rol.findUnique({ where: { id: req.params.id }, include: incluirPermisos }));
+  const [rol, propio] = await req.db((tx) =>
+    Promise.all([
+      tx.rol.findUnique({ where: { id: req.params.id }, include: incluirPermisos }),
+      tx.usuarioRol.count({ where: { rolId: req.params.id, usuarioId: req.user.id } }),
+    ]),
+  );
   if (!rol) throw noEncontrado();
-  res.json(formatear(rol));
+  // esPropio: el usuario tiene este rol y por eso no puede modificarlo (se avisa antes de editar)
+  res.json({ ...formatear(rol), esPropio: propio > 0 });
 });
 
 router.post('/', gestionar, validar(esquemaRol), async (req, res) => {

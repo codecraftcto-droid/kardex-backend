@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { CODIGOS_MODULO, modulosEfectivos } from '../rbac/modulos.js';
+import { invalidarPermisosEstudio } from '../rbac/servicio.js';
 import { z } from 'zod';
 import { prismaSystem } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
@@ -112,6 +114,7 @@ router.get('/:id', async (req, res) => {
   const [empresas, usuarios, almacenes] = uso;
   res.json({
     ...t,
+    modulos: [...modulosEfectivos(t)],
     administradores: admins,
     uso: {
       empresas: { usados: empresas, maximo: t.plan?.maxEmpresas ?? null },
@@ -132,6 +135,8 @@ const esquemaEstudio = z.object({
   emailContacto: email().nullish(),
   telefonoContacto: textoOpcional(30),
   planId: z.uuid().nullish(),
+  /** Módulos contratados aparte del plan */
+  modulosAdicionales: z.array(z.enum(CODIGOS_MODULO)).optional().transform((m) => (m ? [...new Set(m)] : m)),
 });
 
 router.post(
@@ -172,7 +177,9 @@ router.put('/:id', soloAdmin, validar(esquemaEstudio), async (req, res) => {
     await auditarPlataforma(req, { accion: 'estudio.editar', recurso: 'estudio', recursoId: antes.id, tenantId: antes.id, antes, despues: d }, tx);
     return d;
   });
-  res.json(despues);
+  // Cambio de plan o de módulos: los permisos de sus usuarios se recalculan ya
+  await invalidarPermisosEstudio(antes.id);
+  res.json({ ...despues, modulos: [...modulosEfectivos(despues)] });
 });
 
 router.post('/:id/suspender', soloAdmin, validar(z.object({ motivo: z.string().trim().min(5).max(500) })), async (req, res) => {
