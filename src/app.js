@@ -30,6 +30,9 @@ import panelRoutes from './modules/panel/panel.routes.js';
 import cpeRoutes from './modules/cpe/cpe.routes.js';
 import sireRoutes from './modules/sire/sire.routes.js';
 import contabilidadRoutes from './modules/contabilidad/contabilidad.routes.js';
+import importadorRoutes from './modules/importador/importador.routes.js';
+import pleRoutes from './modules/ple/ple.routes.js';
+import declaracionesRoutes from './modules/declaraciones/declaraciones.routes.js';
 import greRoutes from './modules/gre/gre.routes.js';
 
 // Los identificadores BigInt (kardex, auditoría) se serializan como texto en JSON
@@ -44,6 +47,8 @@ export function crearApp() {
 
   app.use(helmet());
   app.use(cors({ origin: env.corsOrigins, credentials: true }));
+  // El importador recibe el archivo en base64: necesita más espacio que el resto de la API
+  app.use('/api/importaciones', express.json({ limit: '12mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
   if (env.NODE_ENV !== 'test') app.use(pinoHttp({ logger, autoLogging: { ignore: (req) => req.url === '/api/salud' } }));
@@ -82,6 +87,9 @@ export function crearApp() {
   api.use('/guias', greRoutes);
   api.use('/sire', sireRoutes);
   api.use('/contabilidad', contabilidadRoutes);
+  api.use('/importaciones', importadorRoutes);
+  api.use('/ple', pleRoutes);
+  api.use('/declaraciones', declaracionesRoutes);
   app.use('/api', api);
 
   app.use(noEncontradoRuta);

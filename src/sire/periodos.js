@@ -24,3 +24,29 @@ export const grupoCronograma = ({ ruc, buenContribuyente }) => (buenContribuyent
 
 /** Días calendario de `hoy` a `fecha` (ambas AAAA-MM-DD); negativo = vencido. */
 export const diasHasta = (fecha, hoy = hoyLima()) => Math.round((Date.parse(fecha) - Date.parse(hoy)) / 86400000);
+
+// ───────────── Rangos para consultar un período ─────────────
+
+/** Fecha (Date) a AAAA-MM-DD en hora de Lima */
+export const fechaLima = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(d);
+
+/** Rango de un período para columnas con hora (timestamp): el mes en hora de Lima (UTC−5) */
+export function rangoLima(periodo) {
+  const s = desplazar(periodo, 1);
+  return { gte: new Date(`${periodo.slice(0, 4)}-${periodo.slice(4)}-01T05:00:00Z`), lt: new Date(`${s.slice(0, 4)}-${s.slice(4)}-01T05:00:00Z`) };
+}
+
+/** Rango de un período para columnas de solo fecha (DATE) */
+export function rangoFecha(periodo) {
+  const s = desplazar(periodo, 1);
+  return { gte: new Date(`${periodo.slice(0, 4)}-${periodo.slice(4)}-01T00:00:00Z`), lt: new Date(`${s.slice(0, 4)}-${s.slice(4)}-01T00:00:00Z`) };
+}
+
+/** Último día del período, AAAA-MM-DD */
+export function finDePeriodo(periodo) {
+  const s = desplazar(periodo, 1);
+  return new Date(Date.UTC(Number(s.slice(0, 4)), Number(s.slice(4)) - 1, 0)).toISOString().slice(0, 10);
+}
+
+/** Tipo de documento de identidad (catálogo 06) según el número: 11 dígitos RUC, 8 DNI */
+export const docTipoPorNumero = (n) => (/^\d{11}$/.test(n ?? '') ? '6' : /^\d{8}$/.test(n ?? '') ? '1' : '0');

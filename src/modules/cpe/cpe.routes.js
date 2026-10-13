@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { autorizarEnEmpresa } from '../../middleware/autorizar.js';
+import { autorizarEnEmpresa, empresaDe } from '../../middleware/autorizar.js';
 import { validar } from '../../middleware/validar.js';
 import { obtenerPermisos } from '../../rbac/servicio.js';
 import { puede, puedeDentroDeEmpresa, tieneAlguno, whereAlcance } from '../../rbac/resolver.js';
@@ -16,10 +16,6 @@ import { PROVEEDORES } from '../../cpe/proveedores/index.js';
  */
 const router = Router();
 const uuid = /^[0-9a-f-]{36}$/i;
-const empresaDe = (origen) => (req) => {
-  const v = origen === 'query' ? req.query.empresaId : req.body?.empresaId;
-  return uuid.test(v || '') ? v : null;
-};
 
 // ───────────── Configuración ─────────────
 

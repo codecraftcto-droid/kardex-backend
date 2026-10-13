@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { autorizarEnEmpresa } from '../../middleware/autorizar.js';
+import { autorizarEnEmpresa, empresaDe } from '../../middleware/autorizar.js';
 import { validar } from '../../middleware/validar.js';
 import { puedeDentroDeEmpresa } from '../../rbac/resolver.js';
 import { auditar } from '../../services/auditoria.js';
@@ -21,10 +21,6 @@ import { cargarBase, copiarPlan, crearCuenta, editarCuenta, eliminarCuenta, guar
  */
 const router = Router();
 const uuid = /^[0-9a-f-]{36}$/i;
-const empresaDe = (origen) => (req) => {
-  const v = origen === 'query' ? req.query.empresaId : req.body?.empresaId;
-  return uuid.test(v || '') ? v : null;
-};
 const audit = (req, tx, accion, recursoId, extra) =>
   auditar(tx, req, { modulo: 'contabilidad', accion, recurso: 'cuenta', recursoId, empresaId: req.empresaId, ...extra });
 
@@ -228,6 +224,7 @@ const esquemaManual = z.object({
     debe: importe.optional(), haber: importe.optional(),
     glosa: z.string().trim().max(200).nullish(),
     terceroDoc: z.string().trim().max(20).nullish(), terceroNombre: z.string().trim().max(200).nullish(),
+    docTipo: z.string().trim().regex(/^\d{2}$/, 'Tipo de comprobante: código de 2 dígitos').nullish().or(z.literal('')).transform((v) => v || null),
     docSerie: z.string().trim().max(20).nullish(), docNumero: z.string().trim().max(20).nullish(),
   })).min(2, 'El asiento necesita al menos dos líneas').max(200),
 });

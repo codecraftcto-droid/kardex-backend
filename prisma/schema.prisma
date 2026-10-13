@@ -60,6 +60,8 @@ enum MotivoMovimiento {
   ANULACION
   TRANSFERENCIA_SALIDA
   TRANSFERENCIA_ENTRADA
+  /// Inventario inicial cargado con el importador (el valor contable entra por el asiento de apertura)
+  SALDO_INICIAL
 }
 
 // ───── Punto de venta ─────
@@ -108,6 +110,28 @@ enum ModalidadTraslado {
 enum ModoSire {
   SIMULADO
   SUNAT
+}
+
+/// Régimen tributario de la empresa (define la tasa del pago a cuenta del impuesto a la renta)
+enum RegimenTributario {
+  GENERAL
+  MYPE
+  ESPECIAL
+  NRUS
+}
+
+/// Datos que se pueden importar desde Excel
+enum TipoImportacion {
+  CLIENTES
+  PRODUCTOS
+  INVENTARIO_INICIAL
+  ASIENTO_APERTURA
+}
+
+enum EstadoImportacion {
+  VALIDADA
+  APLICADA
+  DESCARTADA
 }
 
 /// De qué operación sale un asiento (MANUAL llega en la fase 3C)
@@ -475,33 +499,36 @@ model Empresa {
   exceptuadoRetencion Boolean            @default(false) @map("exceptuado_retencion")
   /// Buen contribuyente (o UESP): SUNAT le da vencimientos propios en el cronograma mensual
   buenContribuyente   Boolean            @default(false) @map("buen_contribuyente")
+  regimenTributario   RegimenTributario  @default(GENERAL) @map("regimen_tributario")
   activo              Boolean            @default(true)
   creadoEn            DateTime           @default(now()) @map("creado_en")
   actualizadoEn       DateTime           @updatedAt @map("actualizado_en")
 
-  tenant           Tenant               @relation(fields: [tenantId], references: [id])
-  sedes            Sede[]
-  almacenes        Almacen[]
-  usuarios         Usuario[]
-  categorias       Categoria[]
-  productos        Producto[]
-  movimientos      Movimiento[]
-  transferencias   Transferencia[]
-  documentos       DocumentoComercial[]
-  clientes         Cliente[]
-  cajas            Caja[]
-  facturacion      ConfigFacturacion?
-  comprobantes     Comprobante[]
-  cobranzas        Cobranza[]
-  guias            GuiaRemision[]
-  sire             ConfigSire?
-  periodosSire     PeriodoSire[]
-  operacionesSire  OperacionSire[]
-  propuestasSire   PropuestaSire[]
-  cuentaContables  CuentaContable[]
-  configContable   ConfigContable?
-  asientos         Asiento[]
-  periodoContables PeriodoContable[]
+  tenant              Tenant               @relation(fields: [tenantId], references: [id])
+  sedes               Sede[]
+  almacenes           Almacen[]
+  usuarios            Usuario[]
+  categorias          Categoria[]
+  productos           Producto[]
+  movimientos         Movimiento[]
+  transferencias      Transferencia[]
+  documentos          DocumentoComercial[]
+  clientes            Cliente[]
+  cajas               Caja[]
+  facturacion         ConfigFacturacion?
+  comprobantes        Comprobante[]
+  cobranzas           Cobranza[]
+  guias               GuiaRemision[]
+  sire                ConfigSire?
+  periodosSire        PeriodoSire[]
+  operacionesSire     OperacionSire[]
+  propuestasSire      PropuestaSire[]
+  cuentaContables     CuentaContable[]
+  configContable      ConfigContable?
+  asientos            Asiento[]
+  periodoContables    PeriodoContable[]
+  importacions        Importacion[]
+  declaracionMensuals DeclaracionMensual[]
 
   @@unique([tenantId, ruc])
   @@index([tenantId])
@@ -1750,4 +1777,56 @@ model PeriodoContable {
   @@unique([empresaId, periodo])
   @@index([tenantId])
   @@map("periodos_contables")
+}
+
+/// Importación desde Excel: se valida (vista previa fila por fila) y luego se aplica.
+/// Solo se aplican las filas sin errores; el resultado queda como historial.
+model Importacion {
+  id            String            @id @default(uuid()) @db.Uuid
+  tenantId      String            @map("tenant_id") @db.Uuid
+  empresaId     String            @map("empresa_id") @db.Uuid
+  tipo          TipoImportacion
+  estado        EstadoImportacion @default(VALIDADA)
+  nombreArchivo String            @map("nombre_archivo")
+  /// Parámetros de la importación (p. ej. fecha del asiento de apertura)
+  opciones      Json              @default("{}")
+  /// Filas normalizadas con su acción y sus errores
+  filas         Json
+  totalFilas    Int               @map("total_filas")
+  filasValidas  Int               @map("filas_validas")
+  resultado     Json?
+  usuarioId     String            @map("usuario_id") @db.Uuid
+  creadoEn      DateTime          @default(now()) @map("creado_en")
+  aplicadoEn    DateTime?         @map("aplicado_en")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@index([tenantId])
+  @@index([empresaId, creadoEn])
+  @@map("importaciones")
+}
+
+/// PDT 621 presentado: los importes declarados (para no recalcular lo ya presentado) y el saldo
+/// a favor que pasa al mes siguiente.
+model DeclaracionMensual {
+  id                  String   @id @default(uuid()) @db.Uuid
+  tenantId            String   @map("tenant_id") @db.Uuid
+  empresaId           String   @map("empresa_id") @db.Uuid
+  periodo             String   @db.Char(6)
+  numeroOrden         String   @map("numero_orden")
+  fechaPresentacion   DateTime @map("fecha_presentacion") @db.Date
+  /// Casillas e importes tal como se declararon
+  datos               Json
+  igvPagado           Decimal  @default(0) @map("igv_pagado") @db.Decimal(14, 2)
+  rentaPagada         Decimal  @default(0) @map("renta_pagada") @db.Decimal(14, 2)
+  saldoFavorSiguiente Decimal  @default(0) @map("saldo_favor_siguiente") @db.Decimal(14, 2)
+  usuarioId           String   @map("usuario_id") @db.Uuid
+  creadoEn            DateTime @default(now()) @map("creado_en")
+  actualizadoEn       DateTime @updatedAt @map("actualizado_en")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@unique([empresaId, periodo])
+  @@index([tenantId])
+  @@map("declaraciones_mensuales")
 }

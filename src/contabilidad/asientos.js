@@ -1,6 +1,6 @@
 import { siguienteValor } from '../kardex/servicio.js';
 import { DOC_IDENTIDAD, TIPO_CP } from '../sire/conciliacion.js';
-import { desplazar, esPeriodo } from '../sire/periodos.js';
+import { docTipoPorNumero, esPeriodo, fechaLima, rangoFecha, rangoLima } from '../sire/periodos.js';
 import { CUENTAS_OPERACION } from './pcge.js';
 import { listarPlan } from './servicio.js';
 
@@ -23,18 +23,8 @@ import { listarPlan } from './servicio.js';
 const NOMBRE_OPERACION = Object.fromEntries(CUENTAS_OPERACION.map(([clave, , nombre]) => [clave, nombre]));
 const r2 = (v) => Math.round(Number(v) * 100) / 100;
 const MAX_DESCUADRE = 0.05;
-const fechaLima = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(d);
 const fechaIso = (d) => d.toISOString().slice(0, 10);
-const rangoLima = (periodo) => {
-  const s = desplazar(periodo, 1);
-  return { gte: new Date(`${periodo.slice(0, 4)}-${periodo.slice(4)}-01T05:00:00Z`), lt: new Date(`${s.slice(0, 4)}-${s.slice(4)}-01T05:00:00Z`) };
-};
-const rangoFecha = (periodo) => {
-  const s = desplazar(periodo, 1);
-  return { gte: new Date(`${periodo.slice(0, 4)}-${periodo.slice(4)}-01T00:00:00Z`), lt: new Date(`${s.slice(0, 4)}-${s.slice(4)}-01T00:00:00Z`) };
-};
 const numCp = (serie, numero) => `${serie}-${String(numero).padStart(8, '0')}`;
-const docTipoPorNumero = (n) => (/^\d{11}$/.test(n) ? '6' : /^\d{8}$/.test(n) ? '1' : '0');
 
 class FaltaCuenta extends Error {}
 

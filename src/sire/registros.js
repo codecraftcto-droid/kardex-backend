@@ -6,7 +6,7 @@ import { withTenant } from '../lib/prisma.js';
 import { conflicto, noEncontrado, solicitudInvalida } from '../lib/errors.js';
 import { MODOS_SIRE } from './proveedores/index.js';
 import { DOC_IDENTIDAD, TIPO_CP, conciliar, fila, totales } from './conciliacion.js';
-import { desplazar } from './periodos.js';
+import { docTipoPorNumero, fechaLima, rangoFecha, rangoLima } from './periodos.js';
 
 /**
  * Registros del SIRE (Fase 2B: RVIE). Flujo de un período:
@@ -23,19 +23,6 @@ const MAX_CONSULTAS = 40;
 // ───────────── Ventas del sistema ─────────────
 
 /** Rango UTC de un período en hora de Lima (UTC−5) */
-const rangoLima = (periodo) => {
-  const sig = desplazar(periodo, 1);
-  return {
-    gte: new Date(`${periodo.slice(0, 4)}-${periodo.slice(4)}-01T05:00:00Z`),
-    lt: new Date(`${sig.slice(0, 4)}-${sig.slice(4)}-01T05:00:00Z`),
-  };
-};
-const rangoFecha = (periodo) => {
-  const sig = desplazar(periodo, 1);
-  return { gte: new Date(`${periodo.slice(0, 4)}-${periodo.slice(4)}-01T00:00:00Z`), lt: new Date(`${sig.slice(0, 4)}-${sig.slice(4)}-01T00:00:00Z`) };
-};
-const fechaLima = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(d);
-const docTipoPorNumero = (n) => (/^\d{11}$/.test(n) ? '6' : /^\d{8}$/.test(n) ? '1' : '0');
 
 /** Ventas del período registradas en el sistema (caja y ventas comerciales), normalizadas */
 export async function ventasDelSistema(tx, empresaId, periodo) {
@@ -49,7 +36,7 @@ export async function ventasDelSistema(tx, empresaId, periodo) {
     }),
     tx.documentoComercial.findMany({
       where: { empresaId, tipo: 'VENTA', estado: { in: ['CONFIRMADO', 'ANULADO'] }, comprobanteTipo: { in: ['FACTURA', 'BOLETA'] }, fechaEmision: rangoFecha(periodo) },
-      select: { id: true, comprobanteTipo: true, serie: true, numero: true, fechaEmision: true, moneda: true, terceroDocumento: true, terceroNombre: true, subtotal: true, igv: true, total: true, estado: true },
+      select: { id: true, comprobanteTipo: true, serie: true, numero: true, fechaEmision: true, moneda: true, tipoCambio: true, terceroDocumento: true, terceroNombre: true, subtotal: true, igv: true, total: true, estado: true },
     }),
   ]);
   return [
@@ -62,7 +49,7 @@ export async function ventasDelSistema(tx, empresaId, periodo) {
     ...documentos.map((d) => fila({
       tipoCp: TIPO_CP[d.comprobanteTipo], serie: d.serie, numero: d.numero, fechaEmision: d.fechaEmision.toISOString().slice(0, 10),
       docTipo: docTipoPorNumero(d.terceroDocumento), docNumero: d.terceroDocumento, nombre: d.terceroNombre,
-      baseGravada: d.subtotal, igv: d.igv, total: d.total, moneda: d.moneda, anulado: d.estado === 'ANULADO', documentoId: d.id,
+      baseGravada: d.subtotal, igv: d.igv, total: d.total, moneda: d.moneda, tipoCambio: Number(d.tipoCambio) || 1, anulado: d.estado === 'ANULADO', documentoId: d.id,
     })),
   ];
 }
@@ -78,15 +65,15 @@ export async function comprasDelSistema(tx, empresaId, periodo) {
   const documentos = await tx.documentoComercial.findMany({
     where: { empresaId, tipo: 'COMPRA', estado: { in: ['CONFIRMADO', 'ANULADO'] }, comprobanteTipo: { in: ['FACTURA', 'BOLETA'] }, fechaEmision: rangoFecha(periodo) },
     select: {
-      id: true, comprobanteTipo: true, serie: true, numero: true, fechaEmision: true, moneda: true, terceroDocumento: true, terceroNombre: true,
-      subtotal: true, igv: true, total: true, estado: true, detraccionMonto: true, detraccionConstancia: true,
+      id: true, comprobanteTipo: true, serie: true, numero: true, fechaEmision: true, moneda: true, tipoCambio: true, terceroDocumento: true, terceroNombre: true,
+      subtotal: true, igv: true, total: true, estado: true, detraccionMonto: true, detraccionConstancia: true, detraccionFecha: true,
     },
   });
   return documentos.filter((d) => esRuc(d.terceroDocumento)).map((d) => fila({
     tipoCp: TIPO_CP[d.comprobanteTipo], serie: d.serie, numero: d.numero, emisor: d.terceroDocumento, fechaEmision: d.fechaEmision.toISOString().slice(0, 10),
     docTipo: '6', docNumero: d.terceroDocumento, nombre: d.terceroNombre,
-    baseGravada: d.subtotal, igv: d.igv, total: d.total, moneda: d.moneda, anulado: d.estado === 'ANULADO', documentoId: d.id,
-    detraccionMonto: Number(d.detraccionMonto), detraccionConstancia: d.detraccionConstancia,
+    baseGravada: d.subtotal, igv: d.igv, total: d.total, moneda: d.moneda, tipoCambio: Number(d.tipoCambio) || 1, anulado: d.estado === 'ANULADO', documentoId: d.id,
+    detraccionMonto: Number(d.detraccionMonto), detraccionConstancia: d.detraccionConstancia, detraccionFecha: d.detraccionFecha?.toISOString().slice(0, 10) ?? null,
   }));
 }
 

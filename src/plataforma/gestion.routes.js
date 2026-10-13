@@ -9,7 +9,10 @@ import { paginacion, respuestaPaginada } from '../lib/http.js';
 import { validar } from '../middleware/validar.js';
 import { contarConexiones } from '../realtime/socket.js';
 import { auditarPlataforma, soloAdmin } from './middleware.js';
-import { CODIGOS_MODULO, MODULOS } from '../rbac/modulos.js';
+import { CODIGOS_MODULO, MODULOS, modulosEfectivos } from '../rbac/modulos.js';
+import IORedis from 'ioredis';
+import { Queue } from 'bullmq';
+import { env } from '../config/env.js';
 import { invalidarPermisosEstudio } from '../rbac/servicio.js';
 import { GRUPOS_CRONOGRAMA, desplazar, esPeriodo } from '../sire/periodos.js';
 
@@ -142,6 +145,50 @@ async function medir(fn) {
   }
 }
 
+/** Colas en segundo plano que se vigilan (nombre BullMQ → descripción) */
+const COLAS = { cpe: 'Envíos a SUNAT (comprobantes, bajas, guías)', sire: 'SIRE (propuestas y aceptaciones)', reportes: 'Exportación de reportes' };
+let colas = null;
+async function estadoColas() {
+  colas ??= Object.fromEntries(Object.keys(COLAS).map((n) => [n, new Queue(n, { connection: new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null }) })]));
+  const r = [];
+  for (const [nombre, q] of Object.entries(colas)) {
+    try {
+      const c = await q.getJobCounts('waiting', 'active', 'delayed', 'failed');
+      r.push({ nombre, descripcion: COLAS[nombre], ...c, ok: true });
+    } catch {
+      r.push({ nombre, descripcion: COLAS[nombre], ok: false });
+    }
+  }
+  return r;
+}
+
+/** Salud de la operación SUNAT de todos los estudios: comprobantes por estado y quién tiene problemas */
+async function operacionSunat(desde) {
+  const [porEstado, problemas, sireConError] = await Promise.all([
+    prismaSystem.comprobante.groupBy({ by: ['estadoSunat'], where: { tipo: { in: ['FACTURA', 'BOLETA', 'NOTA_CREDITO'] }, fechaEmision: { gte: desde } }, _count: { _all: true } }),
+    prismaSystem.$queryRaw`
+      SELECT t.id, t.nombre,
+             count(*) FILTER (WHERE c.estado_sunat = 'RECHAZADO')::int AS rechazados,
+             count(*) FILTER (WHERE c.estado_sunat IN ('PENDIENTE', 'ENVIADO') AND c.fecha_emision < now() - interval '1 day')::int AS atascados
+        FROM comprobantes c JOIN tenants t ON t.id = c.tenant_id
+       WHERE c.fecha_emision >= ${desde} AND c.tipo IN ('FACTURA', 'BOLETA', 'NOTA_CREDITO')
+       GROUP BY t.id, t.nombre
+      HAVING count(*) FILTER (WHERE c.estado_sunat = 'RECHAZADO') > 0
+          OR count(*) FILTER (WHERE c.estado_sunat IN ('PENDIENTE', 'ENVIADO') AND c.fecha_emision < now() - interval '1 day') > 0
+       ORDER BY 3 DESC, 4 DESC LIMIT 10`,
+    prismaSystem.configSire.findMany({
+      where: { ultimoError: { not: null }, activo: true },
+      select: { ultimoError: true, empresa: { select: { razonSocial: true, tenant: { select: { id: true, nombre: true } } } } },
+      take: 10,
+    }),
+  ]);
+  return {
+    porEstado: Object.fromEntries(porEstado.map((g) => [g.estadoSunat, g._count._all])),
+    estudiosConProblemas: problemas,
+    sireConError: sireConError.map((c) => ({ estudioId: c.empresa.tenant.id, estudio: c.empresa.tenant.nombre, empresa: c.empresa.razonSocial, error: c.ultimoError })),
+  };
+}
+
 router.get('/monitoreo', async (_req, res) => {
   const hace30 = new Date(Date.now() - 30 * 86400_000);
   const hace1 = new Date(Date.now() - 86400_000);
@@ -169,8 +216,17 @@ router.get('/monitoreo', async (_req, res) => {
     usuariosActivos: usuarios,
     sesionesActivas: sesiones,
     movimientos: { ultimas24h: movimientos24h, ultimos30d: movimientos30d, porDia },
+    colas: await estadoColas(),
+    sunat: await operacionSunat(hace30),
+    modulos: await usoModulos(),
   });
 });
+
+/** Cuántos estudios activos tienen cada módulo (por plan o como adicional) */
+async function usoModulos() {
+  const tenants = await prismaSystem.tenant.findMany({ where: { activo: true }, select: { modulosAdicionales: true, plan: { select: { modulos: true } } } });
+  return CODIGOS_MODULO.map((codigo) => ({ codigo, nombre: MODULOS[codigo].nombre, estudios: tenants.filter((t) => modulosEfectivos(t).has(codigo)).length }));
+}
 
 // ───────────── Auditoría de plataforma ─────────────
 

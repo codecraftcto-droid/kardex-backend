@@ -99,6 +99,9 @@ const definiciones = [
   ['contabilidad', 'contabilidad.periodo.reabrir', 'Reabrir un período contable cerrado', true],
   ['contabilidad', 'contabilidad.configuracion.editar', 'Configurar las cuentas que usa cada operación en los asientos automáticos', true],
 
+  ['declaraciones', 'declaraciones.pdt.ver', 'Ver la hoja de trabajo del PDT 621 y la DAOT'],
+  ['declaraciones', 'declaraciones.pdt.registrar', 'Registrar el PDT 621 presentado (número de orden e importes)', true],
+
   ['sire', 'sire.periodo.ver', 'Ver los períodos tributarios, vencimientos y el avance de los registros SIRE'],
   ['sire', 'sire.registro.gestionar', 'Sincronizar con SUNAT, descargar propuestas, conciliar y generar los registros SIRE', true],
   ['sire', 'sire.configuracion.editar', 'Configurar las credenciales SIRE de la empresa (usuario SOL y API)', true],

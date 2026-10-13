@@ -32,6 +32,15 @@ export function autorizar(codigo, { alcance } = {}) {
  * permiso en cualquier alcance dentro de ella. `empresaDe(req)` devuelve el empresaId
  * del recurso (o null si no existe → 404).
  */
+/**
+ * Lee el empresaId de la query (GET) o del cuerpo (POST/PUT) para autorizarEnEmpresa.
+ * Uso: autorizarEnEmpresa('permiso', empresaDe('query'))
+ */
+export const empresaDe = (origen) => (req) => {
+  const v = origen === 'query' ? req.query.empresaId : req.body?.empresaId;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v || '') ? v : null;
+};
+
 export function autorizarEnEmpresa(codigo, empresaDe) {
   return async (req, _res, next) => {
     const perms = await obtenerPermisos(req.user);

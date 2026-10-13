@@ -9,7 +9,7 @@ export const MODULOS = {
   cxc: { nombre: 'Crédito y cobranzas', descripcion: 'Ventas al crédito, cuotas, cobranzas y estados de cuenta' },
   facturacion: { nombre: 'Facturación electrónica SUNAT', descripcion: 'Comprobantes y guías de remisión electrónicas, validación de compras' },
   contabilidad: { nombre: 'Contabilidad', descripcion: 'Plan contable (PCGE), asientos, libros Diario y Mayor, estados financieros' },
-  sire: { nombre: 'SIRE (registros de ventas y compras)', descripcion: 'Propuestas de SUNAT, conciliación y generación del RVIE y RCE, vencimientos' },
+  sire: { nombre: 'SIRE (registros de ventas y compras)', descripcion: 'Propuestas de SUNAT, conciliación y generación del RVIE y RCE, vencimientos, PDT 621 y DAOT' },
 };
 export const CODIGOS_MODULO = Object.keys(MODULOS);
 
@@ -21,6 +21,7 @@ const POR_GRUPO = {
   cpe: 'facturacion',
   gre: 'facturacion',
   sire: 'sire',
+  declaraciones: 'sire',
   contabilidad: 'contabilidad',
 };
 /** Excepciones por código exacto */

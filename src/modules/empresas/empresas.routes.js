@@ -10,6 +10,9 @@ import { filtroListado, textoOpcional } from '../../lib/esquemas.js';
 import { limpiarAlcances, paginacion, respuestaPaginada } from '../../lib/http.js';
 import { conflicto, prohibido } from '../../lib/errors.js';
 import { verificarLimite } from '../../services/limites.js';
+import { estadoConfiguracion } from '../../services/configuracionEmpresa.js';
+import { modulosEfectivos } from '../../rbac/modulos.js';
+import { puedeDentroDeEmpresa } from '../../rbac/resolver.js';
 
 const router = Router();
 const porEmpresa = alcance.empresa();
@@ -26,6 +29,7 @@ const esquema = z.object({
   cuentaDetracciones: z.string().trim().regex(/^[\d-]{8,20}$/, 'Número de cuenta inválido').nullish().or(z.literal('')).transform((v) => v || null),
   exceptuadoRetencion: z.boolean().optional(),
   buenContribuyente: z.boolean().optional(),
+  regimenTributario: z.enum(['GENERAL', 'MYPE', 'ESPECIAL', 'NRUS']).optional(),
   metodoValorizacion: z.enum(['PEPS', 'PROMEDIO']).default('PROMEDIO'),
 });
 
@@ -61,6 +65,17 @@ router.get('/:empresaId', autorizar('empresas.empresa.ver', { alcance: porEmpres
     }),
   );
   res.json(empresa);
+});
+
+/** Qué tiene listo la empresa y qué le falta para operar (según los módulos contratados) */
+router.get('/:empresaId/configuracion', autorizar('empresas.empresa.ver', { alcance: porEmpresa }), async (req, res) => {
+  const r = await req.db(async (tx) => {
+    const tenant = await tx.tenant.findUnique({ where: { id: req.tenantId }, select: { modulosAdicionales: true, plan: { select: { modulos: true } } } });
+    return estadoConfiguracion(tx, { empresaId: req.params.empresaId, modulos: modulosEfectivos(tenant) });
+  });
+  if (!r.empresa) return res.status(404).json({ error: 'Empresa no encontrada' });
+  // Cada acción se ofrece solo si el usuario puede hacerla en esta empresa
+  res.json({ ...r, checks: r.checks.map((c) => ({ ...c, accion: { ...c.accion, permitido: puedeDentroDeEmpresa(req.permisos, c.accion.permiso, req.params.empresaId) } })) });
 });
 
 router.post('/', autorizar('empresas.empresa.crear', { alcance: alcance.estudio() }), validar(esquema), async (req, res) => {

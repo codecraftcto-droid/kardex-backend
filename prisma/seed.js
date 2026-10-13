@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { sincronizarCatalogo, crearEstudio, sembrarUnidades } from '../src/services/estudios.js';
 import { cargarBase } from '../src/contabilidad/servicio.js';
+import { crearManual } from '../src/contabilidad/manual.js';
 import { registrarMovimiento } from '../src/kardex/servicio.js';
 import * as transferencias from '../src/kardex/transferencias.js';
 import * as comercial from '../src/comercial/documentos.js';
@@ -368,6 +369,29 @@ async function asegurarCronogramaReferencial() {
   console.log('✔ Cronograma SUNAT REFERENCIAL 2025–2026 (reemplazar por el oficial)');
 }
 
+/**
+ * Asiento de apertura demo: el stock de Andina se cargó con entradas directas al kardex (sin compra
+ * registrada), que no generan asiento. Sin apertura, la contabilidad descuenta el costo de ventas de
+ * un inventario que nunca entró (cuenta 20 negativa). La apertura lleva ese valor contra capital.
+ */
+async function asegurarAperturaDemo(tenantId, empresa, admin) {
+  if (!(await prisma.cuentaContable.count({ where: { empresaId: empresa.id } }))) return;
+  if (await prisma.asiento.findFirst({ where: { empresaId: empresa.id, glosa: 'Asiento de apertura (demo)' } })) return;
+  const entradas = await prisma.movimiento.findMany({
+    where: { empresaId: empresa.id, tipo: 'ENTRADA', motivo: { in: ['COMPRA', 'AJUSTE_POSITIVO', 'SALDO_INICIAL'] }, documentoComercial: null },
+    select: { fecha: true, detalles: { select: { costoTotal: true } } },
+    orderBy: { fecha: 'asc' },
+  });
+  const valor = Math.round(entradas.flatMap((m) => m.detalles).reduce((t, d) => t + Number(d.costoTotal), 0) * 100) / 100;
+  if (!valor) return;
+  const primera = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(entradas[0].fecha);
+  await prisma.$transaction((tx) => crearManual(tx, {
+    tenantId, empresaId: empresa.id, usuarioId: admin.id,
+    datos: { fecha: `${primera.slice(0, 7)}-01`, glosa: 'Asiento de apertura (demo)', lineas: [{ cuenta: '20111', debe: valor }, { cuenta: '5011', haber: valor }] },
+  }));
+  console.log(`✔ Asiento de apertura demo: inventario S/ ${valor.toFixed(2)} contra capital`);
+}
+
 async function main() {
   await sincronizarCatalogo(prisma);
   console.log('✔ Catálogo de permisos sincronizado');
@@ -403,6 +427,7 @@ async function main() {
     await prisma.tenant.update({ where: { id: tenantId }, data: { modulosAdicionales: [...demo.modulosAdicionales, ...faltan] } });
     console.log(`✔ Estudio demo: módulos adicionales ${faltan.join(', ')}`);
   }
+  await asegurarAperturaDemo(tenantId, rAndina.empresa, admin);
   // Plan contable PCGE base en Comercial Andina (Distribuidora del Sur queda sin plan, para probar la carga)
   if (!(await prisma.cuentaContable.count({ where: { empresaId: rAndina.empresa.id } }))) {
     const n = await cargarBase(prisma, { tenantId, empresaId: rAndina.empresa.id });
