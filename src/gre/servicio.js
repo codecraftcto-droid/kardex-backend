@@ -5,10 +5,11 @@ import { logger } from '../lib/logger.js';
 import { withTenant } from '../lib/prisma.js';
 import { conflicto, noEncontrado, solicitudInvalida } from '../lib/errors.js';
 import { siguienteValor } from '../kardex/servicio.js';
-import { descifrar } from '../services/mfa.js';
 import { hoyLima } from '../pos/reglas.js';
 import { PROVEEDORES } from '../cpe/proveedores/index.js';
-import { ErrorDocumento, ErrorTransitorio } from '../cpe/documento.js';
+import { ErrorDocumento, ErrorTransitorio, emisorDe } from '../cpe/documento.js';
+import { conSecretos } from '../cpe/servicio.js';
+import { guardarArchivos } from '../cpe/archivos.js';
 import { CODIGO_DOC_RELACIONADO, MOTIVOS_TRASLADO, erroresGuia } from './reglas.js';
 
 /**
@@ -108,10 +109,10 @@ export async function crearGuia(tx, { tenantId, usuarioId, datos }) {
 }
 
 /** Documento neutro de la guía (lo traduce cada conector) */
-export function documentoGuia(g, empresa) {
+export function documentoGuia(g, empresa, sede = null) {
   return {
-    emisor: { ruc: empresa.ruc, razonSocial: empresa.razonSocial },
-    serie: g.serie, numero: g.numero, fecha: hoyLima(g.fechaEmision), fechaTraslado: g.fechaTraslado.toISOString().slice(0, 10),
+    emisor: emisorDe(empresa, sede),
+    serie: g.serie, numero: g.numero, fecha: hoyLima(g.fechaEmision), fechaHora: g.fechaEmision, ticket: g.sunatTicket ?? null, fechaTraslado: g.fechaTraslado.toISOString().slice(0, 10),
     motivo: g.motivo, motivoDescripcion: g.motivoDescripcion, modalidad: g.modalidad,
     destinatario: { tipoDocumento: g.destinatarioTipoDoc, numeroDocumento: g.destinatarioNumDoc, nombre: g.destinatarioNombre },
     partida: { ubigeo: g.partidaUbigeo, direccion: g.partidaDireccion, establecimiento: g.partidaEstablecimiento },
@@ -138,16 +139,23 @@ const notificar = (g) => {
 export async function enviarGuia({ tenantId, guiaId }) {
   const db = (fn) => withTenant(tenantId, fn);
   const { g, cfg } = await db(async (tx) => {
-    const g = await tx.guiaRemision.findUnique({ where: { id: guiaId }, include: { detalles: true, empresa: { select: { ruc: true, razonSocial: true } } } });
+    const g = await tx.guiaRemision.findUnique({
+      where: { id: guiaId },
+      include: {
+        detalles: true,
+        empresa: { select: { ruc: true, razonSocial: true, nombreComercial: true, direccion: true } },
+      },
+    });
+    if (g) g.sede = await tx.sede.findUnique({ where: { id: g.sedeId }, select: { direccion: true, ubigeo: true, codigoEstablecimiento: true } });
     const c = g ? await tx.configFacturacion.findUnique({ where: { empresaId: g.empresaId } }) : null;
-    return { g, cfg: c?.activo ? { ...c, token: c.tokenCifrado ? descifrar(c.tokenCifrado) : null } : null };
+    return { g, cfg: c?.activo ? conSecretos(c, g.empresa.ruc) : null };
   });
   if (!g) return { estado: 'NO_APLICA', mensaje: 'Guía no encontrada' };
   if (FINALES.includes(g.estadoSunat)) return { estado: g.estadoSunat, mensaje: 'Ya tiene respuesta de SUNAT' };
   if (g.estado === 'ANULADA') return { estado: g.estadoSunat, mensaje: 'La guía está anulada: no se envía' };
   if (!cfg) return { estado: g.estadoSunat, mensaje: 'La empresa no tiene configurada la facturación electrónica' };
   const proveedor = PROVEEDORES[cfg.proveedor];
-  const doc = documentoGuia(g, g.empresa);
+  const doc = documentoGuia(g, g.empresa, g.sede);
   let r;
   try {
     r = g.estadoSunat === 'ENVIADO' ? await proveedor.consultarGuia(cfg, doc) : await proveedor.enviarGuia(cfg, doc);
@@ -157,14 +165,18 @@ export async function enviarGuia({ tenantId, guiaId }) {
     if (e instanceof ErrorTransitorio || !(e instanceof ErrorDocumento)) throw e;
     return { estado: g.estadoSunat, mensaje: e.message, error: true };
   }
-  const a = await db((tx) => tx.guiaRemision.update({
-    where: { id: g.id },
-    data: {
-      estadoSunat: r.estado, sunatCodigo: r.codigo ?? null, sunatDescripcion: r.descripcion?.slice(0, 1000) ?? null,
-      sunatHash: r.hash ?? g.sunatHash, sunatQr: r.qr ?? g.sunatQr, sunatPdf: r.pdf ?? g.sunatPdf, sunatXml: r.xml ?? g.sunatXml, sunatCdr: r.cdr ?? g.sunatCdr,
-      sunatIntentos: { increment: 1 }, sunatUltimoError: null, sunatEnviadoEn: g.sunatEnviadoEn ?? new Date(),
-    },
-  }));
+  const a = await db(async (tx) => {
+    const enlaces = await guardarArchivos(tx, { tenantId, empresaId: g.empresaId, guiaId: g.id, archivos: r.archivos });
+    return tx.guiaRemision.update({
+      where: { id: g.id },
+      data: {
+        estadoSunat: r.estado, sunatCodigo: r.codigo ?? null, sunatDescripcion: r.descripcion?.slice(0, 1000) ?? null,
+        sunatHash: r.hash ?? g.sunatHash, sunatQr: r.qr ?? g.sunatQr, sunatPdf: r.pdf ?? g.sunatPdf,
+        sunatXml: enlaces.XML ?? r.xml ?? g.sunatXml, sunatCdr: enlaces.CDR ?? r.cdr ?? g.sunatCdr, sunatTicket: r.ticket ?? g.sunatTicket,
+        sunatIntentos: { increment: 1 }, sunatUltimoError: null, sunatEnviadoEn: g.sunatEnviadoEn ?? new Date(),
+      },
+    });
+  });
   notificar(a);
   return { estado: r.estado, mensaje: r.descripcion };
 }

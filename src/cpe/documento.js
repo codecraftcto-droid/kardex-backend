@@ -14,13 +14,22 @@ const TIPO_REF = { FACTURA: 'FACTURA', BOLETA: 'BOLETA' };
 export class ErrorTransitorio extends Error {} // red, caída del proveedor: se reintenta
 export class ErrorDocumento extends Error {} // datos inválidos: no sirve reintentar sin corregir
 
-export function documentoNeutro(c, empresa) {
+/** Emisor con el domicilio del establecimiento (sede) donde se emitió: lo exige el XML de SUNAT */
+export function emisorDe(empresa, sede) {
   return {
-    emisor: { ruc: empresa.ruc, razonSocial: empresa.razonSocial },
+    ruc: empresa.ruc, razonSocial: empresa.razonSocial, nombreComercial: empresa.nombreComercial ?? null,
+    direccion: sede?.direccion || empresa.direccion || null, ubigeo: sede?.ubigeo ?? null, establecimiento: sede?.codigoEstablecimiento || '0000',
+  };
+}
+
+export function documentoNeutro(c, empresa, sede = null) {
+  return {
+    emisor: emisorDe(empresa, sede),
     tipo: c.tipo, // FACTURA | BOLETA | NOTA_CREDITO
     serie: c.serie,
     numero: c.numero,
     fecha: hoyLima(c.fechaEmision), // AAAA-MM-DD en hora de Perú
+    fechaHora: c.fechaEmision,
     moneda: c.moneda,
     cliente: {
       tipoDocumento: c.clienteTipoDocumento, // DNI | RUC | CARNE_EXTRANJERIA | PASAPORTE | SIN_DOCUMENTO

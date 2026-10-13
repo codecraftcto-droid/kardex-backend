@@ -27,6 +27,7 @@ Ambos dominios deben apuntar (registro **A**) a la IP del servidor de Dokploy:
 |---|---|---|
 | `codecraftcto-droid/kardex-backend` | API, Socket.io, worker, migraciones | `backend` |
 | `codecraftcto-droid/kardex-frontend` | SPA Vue (nginx) | `frontend` |
+| `codecraftcto-droid/kardex-sunat-service` | Servicio SUNAT (Laravel + Greenter), opcional | `sunat` (sin dominio) |
 
 - Ambos deben ser **privados** (GitHub → Settings → General → Danger Zone → Change visibility).
 - En Dokploy: **Settings → Git → GitHub** y conecte la cuenta (GitHub App) para acceder a los repos privados.
@@ -120,6 +121,25 @@ Compruebe: `https://api.kardex.codecraft.net.pe/api/salud` → `{"ok":true}`.
 
 > **`MFA_ENCRYPTION_KEY` no se puede cambiar ni perder**: cifra los secretos 2FA de todos los usuarios.
 > Respáldela junto con la base de datos.
+
+---
+
+## 3.1 Servicio SUNAT (opcional: solo para «SUNAT directo»)
+
+Necesario solo si alguna empresa enviará sus comprobantes directo a SUNAT con su certificado y clave SOL, en lugar
+de usar Nubefact.
+
+1. Aplicación nueva en Dokploy desde `kardex-sunat-service`, **Build type: Dockerfile**, **sin dominio**.
+2. Variables: `APP_KEY` (`php artisan key:generate --show`) y `SERVICIO_TOKEN` (`openssl rand -hex 24`).
+3. En el backend agregue y vuelva a desplegar:
+
+```env
+SUNAT_SERVICIO_URL=http://HOST_INTERNO_DEL_SERVICIO_SUNAT
+SUNAT_SERVICIO_TOKEN=la-misma-clave-que-SERVICIO_TOKEN
+```
+
+4. En Kardex: ficha de la empresa → Facturación electrónica → **SUNAT directo**. Pruebe en *Pruebas* (beta de SUNAT),
+   luego suba el certificado y la clave SOL y pase a *Producción*.
 
 ---
 

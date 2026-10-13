@@ -37,6 +37,9 @@ const schema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   MAIL_FROM: z.string().default('Kardex <no-reply@kardex.local>'),
+  /** Servicio SUNAT propio (Laravel + Greenter) para el proveedor SUNAT_DIRECTO: URL interna y clave compartida */
+  SUNAT_SERVICIO_URL: z.union([z.url(), z.literal('')]).default(''),
+  SUNAT_SERVICIO_TOKEN: z.union([z.string().min(32, 'SUNAT_SERVICIO_TOKEN: mínimo 32 caracteres'), z.literal('')]).default(''),
 });
 
 const parsed = schema.safeParse(process.env);

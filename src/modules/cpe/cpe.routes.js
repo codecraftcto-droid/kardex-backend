@@ -5,8 +5,9 @@ import { validar } from '../../middleware/validar.js';
 import { obtenerPermisos } from '../../rbac/servicio.js';
 import { puede, puedeDentroDeEmpresa, tieneAlguno, whereAlcance } from '../../rbac/resolver.js';
 import { auditar } from '../../services/auditoria.js';
-import { noEncontrado, prohibido } from '../../lib/errors.js';
-import { ELECTRONICOS, configPublica, enviarComprobante, guardarConfig, probarConexion } from '../../cpe/servicio.js';
+import { noEncontrado, prohibido, solicitudInvalida } from '../../lib/errors.js';
+import { ELECTRONICOS, configPublica, enviarComprobante, guardarCertificado, guardarConfig, probarConexion } from '../../cpe/servicio.js';
+import { ErrorDocumento } from '../../cpe/documento.js';
 import { encolarEnvio } from '../../cpe/cola.js';
 import { PROVEEDORES } from '../../cpe/proveedores/index.js';
 
@@ -39,6 +40,11 @@ const esquemaConfig = z.object({
   /** Credenciales API SUNAT (consulta de validez de comprobantes de compra) */
   sunatClientId: z.string().trim().max(100).nullish().transform((v) => v || null),
   sunatClientSecret: z.string().trim().max(200).nullish().transform((v) => v || null),
+  /** SUNAT directo: usuario SOL secundario (sin el RUC), su clave y la API de guías */
+  solUsuario: z.string().trim().toUpperCase().max(30).nullish().transform((v) => v || null),
+  solClave: z.string().max(60).nullish().transform((v) => v || null),
+  greClientId: z.string().trim().max(100).nullish().transform((v) => v || null),
+  greClientSecret: z.string().trim().max(200).nullish().transform((v) => v || null),
 });
 
 router.put('/config', autorizarEnEmpresa('cpe.configuracion.editar', empresaDe('body')), validar(esquemaConfig), async (req, res) => {
@@ -48,12 +54,37 @@ router.put('/config', autorizarEnEmpresa('cpe.configuracion.editar', empresaDe('
     // El token nunca se audita: solo si cambió
     await auditar(tx, req, {
       modulo: 'cpe', accion: 'configuracion.editar', recurso: 'empresa', recursoId: req.empresaId, empresaId: req.empresaId,
-      antes: configPublica(antes), despues: { ...configPublica(c), tokenCambiado: Boolean(req.body.token), secretoSunatCambiado: Boolean(req.body.sunatClientSecret) },
+      antes: configPublica(antes),
+      despues: {
+        ...configPublica(c), tokenCambiado: Boolean(req.body.token), secretoSunatCambiado: Boolean(req.body.sunatClientSecret),
+        claveSolCambiada: Boolean(req.body.solClave), secretoGuiasCambiado: Boolean(req.body.greClientSecret),
+      },
     });
     return c;
   });
   res.json(configPublica(cfg));
 });
+
+/** Sube el certificado digital (.pfx en base64). Nunca se devuelve: solo titular y vencimiento. */
+router.post(
+  '/config/certificado',
+  autorizarEnEmpresa('cpe.configuracion.editar', empresaDe('body')),
+  validar(z.object({ empresaId: z.uuid(), pfx: z.base64('Archivo inválido').max(400_000, 'El certificado no debe pesar más de 300 KB'), clave: z.string().max(200).default('') })),
+  async (req, res) => {
+    let r;
+    try {
+      r = await req.db((tx) => guardarCertificado(tx, { tenantId: req.tenantId, empresaId: req.empresaId, pfxBase64: req.body.pfx, clave: req.body.clave }));
+    } catch (e) {
+      if (e instanceof ErrorDocumento) throw solicitudInvalida(e.message);
+      throw e;
+    }
+    await req.db((tx) => auditar(tx, req, {
+      modulo: 'cpe', accion: 'certificado.subir', recurso: 'empresa', recursoId: req.empresaId, empresaId: req.empresaId,
+      despues: { titular: r.titular, venceEn: r.venceEn },
+    }));
+    res.json(r);
+  },
+);
 
 router.post('/config/probar', autorizarEnEmpresa('cpe.configuracion.editar', empresaDe('body')), async (req, res) => {
   res.json(await req.db((tx) => probarConexion(tx, req.empresaId)));
@@ -122,6 +153,22 @@ router.get('/resumen', autorizarEnEmpresa('pos.venta.ver', empresaDe('query')), 
     puedeConfigurar: puedeDentroDeEmpresa(req.permisos, 'cpe.configuracion.editar', req.empresaId),
     puedeEnviar: puedeDentroDeEmpresa(req.permisos, 'cpe.envio.gestionar', req.empresaId),
   });
+});
+
+/** XML firmado o CDR guardados de un envío directo (con el alcance del comprobante o la guía) */
+router.get('/archivos/:id', async (req, res) => {
+  if (!uuid.test(req.params.id)) throw noEncontrado();
+  req.permisos = await obtenerPermisos(req.user);
+  const a = await req.db((tx) => tx.archivoSunat.findUnique({ where: { id: req.params.id } }));
+  if (!a) throw noEncontrado();
+  const origen = await req.db((tx) => a.comprobanteId
+    ? tx.comprobante.findUnique({ where: { id: a.comprobanteId }, select: { empresaId: true, sedeId: true, almacenId: true } })
+    : tx.guiaRemision.findUnique({ where: { id: a.guiaId }, select: { empresaId: true, sedeId: true, almacenId: true } }));
+  const permiso = a.comprobanteId ? 'pos.venta.ver' : 'gre.guia.ver';
+  if (!origen || !puede(req.permisos, permiso, origen)) throw noEncontrado();
+  res.setHeader('Content-Type', a.nombre.endsWith('.zip') ? 'application/zip' : 'application/xml');
+  res.setHeader('Content-Disposition', `attachment; filename="${a.nombre.replace(/[^\w.-]/g, '_')}"`);
+  res.send(Buffer.from(a.contenido));
 });
 
 export default router;

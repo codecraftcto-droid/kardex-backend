@@ -57,13 +57,24 @@ export async function estadoConfiguracion(tx, { empresaId, modulos }) {
   // ── SUNAT ──
   if (tiene('facturacion')) {
     const real = facturacion && facturacion.proveedor !== 'SIMULADO';
+    const ambiente = facturacion?.ambiente === 'PRODUCCION' ? 'producción' : 'pruebas';
+    // Qué le falta al proveedor elegido para enviar en el ambiente elegido
+    const falta = !real ? null
+      : facturacion.proveedor === 'NUBEFACT' ? (!facturacion.tokenCifrado && 'Falta el token del proveedor')
+        : facturacion.ambiente === 'PRODUCCION' && !facturacion.certificadoCifrado ? 'Falta el certificado digital'
+          : facturacion.ambiente === 'PRODUCCION' && (!facturacion.solUsuario || !facturacion.solClaveCifrada) ? 'Falta el usuario o la clave SOL'
+            : null;
+    const diasCertificado = facturacion?.certificadoVence ? Math.floor((facturacion.certificadoVence - Date.now()) / 86_400_000) : null;
+    const certificadoPorVencer = diasCertificado != null && diasCertificado <= 30;
     agregar({
       clave: 'facturacion', grupo: 'SUNAT', titulo: 'Facturación electrónica',
-      estado: !facturacion || !facturacion.activo ? 'pendiente' : !real ? 'aviso' : !facturacion.tokenCifrado ? 'pendiente' : 'ok',
+      estado: !facturacion || !facturacion.activo || falta || (certificadoPorVencer && diasCertificado < 0) ? 'pendiente' : !real || certificadoPorVencer ? 'aviso' : 'ok',
       detalle: !facturacion ? 'Sin proveedor configurado: los comprobantes no se envían a SUNAT'
         : !facturacion.activo ? 'Desactivada'
           : !real ? 'En modo simulado: los comprobantes no llegan a SUNAT'
-            : !facturacion.tokenCifrado ? 'Falta el token del proveedor' : `${facturacion.proveedor} · ${facturacion.ambiente === 'PRODUCCION' ? 'producción' : 'pruebas'}`,
+            : falta || (certificadoPorVencer
+              ? (diasCertificado < 0 ? 'El certificado digital venció: renuévelo' : `El certificado digital vence en ${diasCertificado} día(s)`)
+              : `${facturacion.proveedor === 'SUNAT_DIRECTO' ? 'SUNAT directo' : facturacion.proveedor} · ${ambiente}`),
       accion: { tipo: 'modal', destino: 'facturacion', permiso: 'cpe.configuracion.editar' },
     });
     agregar({

@@ -203,6 +203,8 @@ enum EstadoRegistroSire {
 enum ProveedorCpe {
   SIMULADO
   NUBEFACT
+  /// Envío directo a SUNAT con el servicio propio (Greenter): certificado y clave SOL de la empresa
+  SUNAT_DIRECTO
 }
 
 enum AmbienteCpe {
@@ -1379,6 +1381,16 @@ model ConfigFacturacion {
   /// Credenciales API de SUNAT (Consulta de validez de comprobantes), generadas en SOL
   sunatClientId            String?      @map("sunat_client_id")
   sunatClientSecretCifrado String?      @map("sunat_client_secret_cifrado")
+  /// SUNAT directo: certificado digital (PEM con clave privada), cifrado; nunca sale del servidor
+  certificadoCifrado       String?      @map("certificado_cifrado")
+  certificadoTitular       String?      @map("certificado_titular")
+  certificadoVence         DateTime?    @map("certificado_vence")
+  /// SUNAT directo: usuario SOL secundario (sin el RUC) y su clave, cifrada
+  solUsuario               String?      @map("sol_usuario")
+  solClaveCifrada          String?      @map("sol_clave_cifrada")
+  /// SUNAT directo: credenciales de la API REST de guías de remisión
+  greClientId              String?      @map("gre_client_id")
+  greClientSecretCifrado   String?      @map("gre_client_secret_cifrado")
   activo                   Boolean      @default(true)
   creadoEn                 DateTime     @default(now()) @map("creado_en")
   actualizadoEn            DateTime     @updatedAt @map("actualizado_en")
@@ -1446,6 +1458,8 @@ model GuiaRemision {
   sunatIntentos          Int               @default(0) @map("sunat_intentos")
   sunatUltimoError       String?           @map("sunat_ultimo_error")
   sunatEnviadoEn         DateTime?         @map("sunat_enviado_en")
+  /// Ticket de la API de guías: se consulta hasta que SUNAT responde
+  sunatTicket            String?           @map("sunat_ticket")
   usuarioId              String            @map("usuario_id") @db.Uuid
   creadoEn               DateTime          @default(now()) @map("creado_en")
 
@@ -1829,4 +1843,23 @@ model DeclaracionMensual {
   @@unique([empresaId, periodo])
   @@index([tenantId])
   @@map("declaraciones_mensuales")
+}
+
+/// XML firmado y CDR de los envíos directos a SUNAT (constancia ante una fiscalización)
+model ArchivoSunat {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  empresaId     String   @map("empresa_id") @db.Uuid
+  comprobanteId String?  @map("comprobante_id") @db.Uuid
+  guiaId        String?  @map("guia_id") @db.Uuid
+  /// XML | CDR | XML_BAJA | CDR_BAJA
+  tipo          String
+  nombre        String
+  contenido     Bytes
+  creadoEn      DateTime @default(now()) @map("creado_en")
+
+  @@index([tenantId])
+  @@index([comprobanteId])
+  @@index([guiaId])
+  @@map("archivos_sunat")
 }
